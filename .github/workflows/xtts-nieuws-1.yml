@@ -166,7 +166,7 @@ jobs:
           final.export("stationname.mp3", format="mp3", bitrate="128k")
 
           try:
-              id3 = ID3("Focus_Fantastique_tts-1.mp3")
+              id3 = ID3("stationname.mp3")
           except ID3NoHeaderError:
               id3 = ID3()
 
