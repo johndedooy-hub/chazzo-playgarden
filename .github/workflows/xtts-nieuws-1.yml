@@ -110,6 +110,7 @@ jobs:
               "processed.mp3",
               language="nl",
               beam_size=3,
+              temperature=0
               vad_filter=True
           )
 
