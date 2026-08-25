@@ -1,4 +1,4 @@
-name: RSS to Text to XTTSv2 FAST
+name: RSS to Text to XTTSv2 FAST [2]
 
 on:
   workflow_dispatch:
