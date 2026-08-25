@@ -104,7 +104,7 @@ jobs:
           normalized = effects.normalize(faded)
           normalized.export("processed.mp3", format="mp3", bitrate="128k")
 
-          # --- WHISPER ---
+          # --- WHISPER (VERBETERD) ---
           whisper = WhisperModel("medium", device="cpu", compute_type="int8")
           segments, _ = whisper.transcribe(
               "processed.mp3",
@@ -114,16 +114,25 @@ jobs:
               vad_filter=True
           )
 
-          # --- NIEUWS OP 1 REGEL ---
+          # Alle segmenten verzamelen
           raw_lines = [seg.text.strip() for seg in segments if seg.text.strip()]
 
-          # Combineer alle tekst in één vloeiende regel
+          # Combineer tot één vloeiende zin
           one_line = " ".join(raw_lines)
 
           # Dubbele spaties verwijderen
           one_line = " ".join(one_line.split())
 
-          # Punt toevoegen als nodig
+          # Leestekens opschonen
+          for bad, good in {
+              " ,": ",",
+              " .": ".",
+              " !": "!",
+              " ?": "?",
+          }.items():
+              one_line = one_line.replace(bad, good)
+
+          # Punt toevoegen indien nodig
           if not one_line.endswith((".", "!", "?")):
               one_line += "."
 
@@ -198,4 +207,3 @@ jobs:
             git commit -m "FAST Update: Chazzo Nieuws Update - UTC+2 $(date '+%H:%M')"
             git push
           fi
-          
