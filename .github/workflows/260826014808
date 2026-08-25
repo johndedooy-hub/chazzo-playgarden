@@ -1,0 +1,211 @@
+name: Focus Regio News TTS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate-news-audio:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install edge-tts pydub mutagen
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Download transcript from Google Drive
+        run: |
+          DRIVE_FILE_ID="1FMLqmvQrtd7hYb_YNV9zI3-GNLvYr-6Z"
+          wget --quiet "https://drive.google.com/uc?id=${DRIVE_FILE_ID}&export=download" -O Focus-Regio-Blok.txt
+          
+          if [ ! -f "Focus-Regio-Blok.txt" ]; then
+            echo "ERROR: Failed to download transcript from Google Drive"
+            exit 1
+          fi
+          
+          echo "Transcript downloaded successfully:"
+          ls -lh Focus-Regio-Blok.txt
+
+      - name: Check newsbed
+        run: |
+          if [ ! -f "newsbed.mp3" ]; then
+            echo "ERROR: newsbed.mp3 not found"
+            exit 1
+          fi
+
+          echo "Newsbed found:"
+          ls -lh newsbed.mp3
+
+      - name: Convert transcript to natural news speech
+        run: |
+          python3 << 'EOF'
+          import asyncio
+          import edge_tts
+          import os
+          import re
+          from pydub import AudioSegment
+
+          input_file = "Focus-Regio-Blok.txt"
+          newsbed_file = "newsbed.mp3"
+          output_file = "Focus-Regio-News.mp3"
+
+          voice = "nl-NL-FennaNeural"
+          rate = "+2%"
+
+          print("Reading transcript...")
+
+          with open(input_file, "r", encoding="utf-8") as f:
+              text = f.read().strip()
+
+          if not text:
+              print("ERROR: Transcript is empty")
+              exit(1)
+
+          paragraphs = re.split(r'\n\s*\n', text)
+
+          chunks = []
+          current_chunk = ""
+          max_chars = 3000
+
+          for paragraph in paragraphs:
+              paragraph = paragraph.strip()
+              if not paragraph:
+                  continue
+
+              if len(current_chunk) + len(paragraph) + 2 <= max_chars:
+                  if current_chunk:
+                      current_chunk += "\n\n"
+                  current_chunk += paragraph
+              else:
+                  if current_chunk:
+                      chunks.append(current_chunk)
+
+                  if len(paragraph) > max_chars:
+                      sentences = re.split(r'(?<=[.!?])\s+', paragraph)
+                      current_chunk = ""
+
+                      for sentence in sentences:
+                          if not sentence.strip():
+                              continue
+
+                          if len(current_chunk) + len(sentence) + 1 <= max_chars:
+                              if current_chunk:
+                                  current_chunk += " "
+                              current_chunk += sentence
+                          else:
+                              if current_chunk:
+                                  chunks.append(current_chunk)
+                              current_chunk = sentence
+                  else:
+                      current_chunk = paragraph
+
+          if current_chunk:
+              chunks.append(current_chunk)
+
+          async def generate_chunk(text, filename):
+              communicate = edge_tts.Communicate(text, voice, rate=rate)
+              await communicate.save(filename)
+
+          async def main():
+              audio_parts = []
+
+              for index, chunk in enumerate(chunks, start=1):
+                  filename = f"tts_part_{index}.mp3"
+                  print(f"Generating part {index}/{len(chunks)}...")
+                  await generate_chunk(chunk, filename)
+                  audio_parts.append(filename)
+
+              final_audio = AudioSegment.empty()
+              pause = AudioSegment.silent(duration=350)
+
+              for index, filename in enumerate(audio_parts):
+                  part = AudioSegment.from_mp3(filename)
+                  if len(final_audio) > 0:
+                      final_audio += pause
+                  final_audio += part
+
+              if os.path.exists(newsbed_file):
+                  newsbed = AudioSegment.from_mp3(newsbed_file)
+                  while len(newsbed) < len(final_audio):
+                      newsbed += newsbed
+                  newsbed = newsbed[:len(final_audio)]
+                  newsbed = newsbed - 15
+                  final_audio = final_audio.overlay(newsbed)
+
+              final_audio.export(output_file, format="mp3", bitrate="96k")
+
+              for filename in audio_parts:
+                  if os.path.exists(filename):
+                      os.remove(filename)
+
+          asyncio.run(main())
+
+          print("✓ TTS generation complete!")
+          print(f"✓ Output: {output_file}")
+          EOF
+
+      - name: Add ID3 tags to final MP3
+        run: |
+          python3 << 'EOF'
+          from mutagen.id3 import ID3, TIT2, TALB, TPE1, APIC, ID3NoHeaderError
+
+          mp3 = "Focus-Regio-News.mp3"
+          cover = "FocusRegioAgenda.jpg"
+
+          try:
+              tags = ID3(mp3)
+          except ID3NoHeaderError:
+              tags = ID3()
+
+          tags.add(TPE1(encoding=3, text="Focus-Regio-Agenda"))   # Artiest
+          tags.add(TALB(encoding=3, text="Focus-Regio-Agenda"))   # Album
+          tags.add(TIT2(encoding=3, text="Focus-Regio-Agenda"))   # Titel
+
+          with open(cover, "rb") as img:
+              tags.add(APIC(
+                  encoding=3,
+                  mime="image/jpeg",
+                  type=3,
+                  desc="Cover",
+                  data=img.read()
+              ))
+
+          tags.save(mp3)
+          print("✓ ID3 tags added successfully")
+          EOF
+
+      - name: Show output
+        run: |
+          echo "Generated audio:"
+          ls -lh Focus-Regio-News.mp3
+
+      - name: Configure Git
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+      - name: Commit and push changes
+        run: |
+          if git diff --quiet Focus-Regio-News.mp3; then
+            echo "No changes to Focus-Regio-News.mp3"
+          else
+            git add Focus-Regio-News.mp3
+            git commit -m "Update: Focus Regio News"
+            git push
+          fi
+          
