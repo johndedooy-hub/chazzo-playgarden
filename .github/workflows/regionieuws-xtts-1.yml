@@ -41,7 +41,7 @@ jobs:
       - name: Run FAST pipeline
         env:
           DRIVE_TXT_URL: 'https://drive.google.com/uc?export=download&id=1FMLqmvQrtd7hYb_YNV9zI3-GNLvYr-6Z'
-          COVER_IMAGE: 'stationname.jpg'
+          COVER_IMAGE: 'regionieuws.jpg cv'
           XTTS_SPEED: '1.50'
           XDG_CACHE_HOME: '/home/runner/.cache'
           TORCH_HOME: '/home/runner/.cache/torch'
@@ -81,7 +81,7 @@ jobs:
 
           # --- TXT OPSLAAN ---
           try:
-              with open("stationname.txt", "w", encoding="utf-8") as f:
+              with open("regionieuws.txt", "w", encoding="utf-8") as f:
                   f.write(transcript)
           except Exception as e:
               exit_with(f"Fout bij opslaan stationname.txt: {e}", 1)
@@ -190,30 +190,30 @@ jobs:
 
           # --- EXPORT MP3 ---
           try:
-              final.export("stationname.mp3", format="mp3", bitrate="128k")
+              final.export("regionieuws.mp3", format="mp3", bitrate="128k")
           except Exception as e:
-              exit_with(f"Fout bij export stationname.mp3: {e}", 1)
+              exit_with(f"Fout bij export regionieuws.mp3: {e}", 1)
 
           # --- ID3 TAGS ---
           try:
               try:
-                  id3 = ID3("stationname.mp3")
+                  id3 = ID3("regionieuws.mp3")
               except ID3NoHeaderError:
                   id3 = ID3()
 
-              id3.add(TIT2(encoding=3, text="Chazzo Nieuws Update"))
-              id3.add(TALB(encoding=3, text="Chazzo Nieuws Update"))
+              id3.add(TIT2(encoding=3, text="Chazzo Regio Update"))
+              id3.add(TALB(encoding=3, text="Chazzo Regio Update"))
 
-              cover = os.environ.get("COVER_IMAGE", "stationname.jpg")
+              cover = os.environ.get("COVER_IMAGE", "regionieuws.jpg")
               if os.path.exists(cover):
                   with open(cover, "rb") as img:
                       id3.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=img.read()))
 
-              id3.save("stationname.mp3")
+              id3.save("regionieuws.mp3")
           except Exception as e:
               print("Waarschuwing: ID3 taggen faalde:", e)
 
-          print("Pipeline voltooid: stationname.txt en stationname.mp3 aangemaakt.")
+          print("Pipeline voltooid: regionieuws.txt en regionieuws.mp3 aangemaakt.")
           EOF
 
       - name: Commit and push changes
@@ -222,13 +222,13 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
 
-          git add stationname.mp3 stationname.txt || true
+          git add regionieuws.mp3 regionieuws.txt || true
           git pull origin main --rebase || true
 
           if git diff --cached --quiet; then
             echo "Geen wijzigingen om te committen."
           else
-            git commit -m "FAST Update: Chazzo Nieuws Update - UTC+2 $(date '+%H:%M')"
+            git commit -m "FAST Update: Chazzo Regio Update - UTC+2 $(date '+%H:%M')"
             git push
           fi
           
