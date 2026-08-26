@@ -1,4 +1,4 @@
-name: RSS to Text to XTTSv2 FAST [16]
+name: Text to XTTSv2 Regio [1]
 
 on:
   workflow_dispatch:
