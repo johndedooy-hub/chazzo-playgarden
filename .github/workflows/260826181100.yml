@@ -1,0 +1,209 @@
+name: RSS to Text to XTTSv2 FAST [12]
+
+on:
+  workflow_dispatch:
+
+jobs:
+  process-audio:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache TTS models
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/tts
+            ~/.cache/faster_whisper
+          key: tts-whisper-cache
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies & FFmpeg
+        run: |
+          set -e
+          python -m pip install --upgrade pip
+          python -m pip install torchcodec
+          python -m pip install "transformers<4.40.0" "scipy<1.13.0" pydub mutagen requests python-dateutil TTS
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Run FAST pipeline
+        env:
+          DRIVE_TXT_URL: 'https://drive.google.com/uc?export=download&id=1FMLqmvQrtd7hYb_YNV9zI3-GNLvYr-6Z'
+          COVER_IMAGE: 'stationname.jpg'
+          XTTS_SPEED: '1.50'
+        run: |
+          set -e
+          python3 - <<'EOF'
+          import os
+          import sys
+          import math
+          import requests
+          from pydub import AudioSegment, effects
+          from mutagen.id3 import ID3, TIT2, TALB, APIC, ID3NoHeaderError
+
+          # --- HELPERS ---
+          def exit_with(msg, code=1):
+              print(msg)
+              sys.exit(code)
+
+          # --- DOWNLOAD TXT VAN GOOGLE DRIVE ---
+          url = os.environ.get("DRIVE_TXT_URL")
+          if not url:
+              exit_with("DRIVE_TXT_URL is niet ingesteld.", 1)
+
+          try:
+              resp = requests.get(url, timeout=30)
+              resp.raise_for_status()
+              txt_data = resp.text.strip()
+          except Exception as e:
+              exit_with(f"Fout bij downloaden TXT: {e}", 1)
+
+          if not txt_data:
+              exit_with("TXT bestand is leeg — workflow stopt netjes.", 0)
+
+          # --- TXT DIRECT GEBRUIKEN (GEEN INTRO/OUTRO, GEEN ZINVERWIJDERING) ---
+          transcript = txt_data
+
+          # --- TXT OPSLAAN ---
+          try:
+              with open("stationname.txt", "w", encoding="utf-8") as f:
+                  f.write(transcript)
+          except Exception as e:
+              exit_with(f"Fout bij opslaan stationname.txt: {e}", 1)
+
+          # --- CPML TOS automatisch accepteren (non-interactive CI) ---
+          try:
+              from TTS.utils.manage import ModelManager
+              def _skip_tos(self, output_path):
+                  print("CPML TOS automatisch geaccepteerd (CI).")
+                  return True
+              ModelManager.ask_tos = _skip_tos
+          except Exception as e:
+              print("Waarschuwing: kon CPML TOS override niet instellen:", e)
+
+          # --- XTTS INITIALISATIE ---
+          try:
+              from TTS.api import TTS
+          except Exception as e:
+              exit_with(f"Fout bij import TTS.api: {e}", 1)
+
+          # Probeer model te laden; geef duidelijke foutmelding bij mislukking
+          try:
+              tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2")
+          except Exception as e:
+              exit_with(f"Fout bij laden XTTS model: {e}", 1)
+
+          # --- PREPARE SPEAKER WAV ---
+          speaker_src = "stem_voorbeeld.mp3"
+          if not os.path.exists(speaker_src):
+              # fallback: maak korte stille wav zodat TTS niet faalt
+              print("stem_voorbeeld.mp3 niet gevonden; maak fallback clean_speaker.wav (stil).")
+              silent = AudioSegment.silent(duration=1000)  # 1s silence
+              silent.export("clean_speaker.wav", format="wav")
+          else:
+              try:
+                  speaker = AudioSegment.from_file(speaker_src)
+                  speaker = effects.normalize(speaker)
+                  speaker = speaker.low_pass_filter(9000)
+                  speaker = speaker.high_pass_filter(100)
+                  speaker.export("clean_speaker.wav", format="wav")
+              except Exception as e:
+                  exit_with(f"Fout bij verwerken stem_voorbeeld.mp3: {e}", 1)
+
+          # --- RUN TTS ---
+          try:
+              speed = float(os.environ.get("XTTS_SPEED", "1.50"))
+          except Exception:
+              speed = 1.50
+
+          try:
+              tts.tts_to_file(
+                  text=transcript,
+                  speaker_wav="clean_speaker.wav",
+                  language="nl",
+                  file_path="raw.wav",
+                  speed=speed
+              )
+          except Exception as e:
+              exit_with(f"Fout tijdens TTS generatie: {e}", 1)
+
+          # --- LAAD EN NORMALISEER OUTPUT ---
+          if not os.path.exists("raw.wav"):
+              exit_with("raw.wav niet aangemaakt door TTS.", 1)
+
+          try:
+              voice = AudioSegment.from_file("raw.wav")
+              voice = effects.normalize(voice)
+          except Exception as e:
+              exit_with(f"Fout bij laden raw.wav: {e}", 1)
+
+          # --- NEWSBED OVERLAY (optioneel) ---
+          final = voice
+          if os.path.exists("newsbed-1.mp3"):
+              try:
+                  bed = AudioSegment.from_file("newsbed-1.mp3") - 20
+                  if len(bed) < len(voice) and len(bed) > 0:
+                      repeat = math.ceil(len(voice) / len(bed))
+                      bed = bed * repeat
+                  bed = bed[:len(voice)]
+                  final = bed.overlay(voice)
+              except Exception as e:
+                  print("Waarschuwing: newsbed overlay faalde:", e)
+                  final = voice
+
+          # --- EXPORT MP3 ---
+          try:
+              final.export("stationname.mp3", format="mp3", bitrate="128k")
+          except Exception as e:
+              exit_with(f"Fout bij export stationname.mp3: {e}", 1)
+
+          # --- ID3 TAGS ---
+          try:
+              try:
+                  id3 = ID3("stationname.mp3")
+              except ID3NoHeaderError:
+                  id3 = ID3()
+
+              id3.add(TIT2(encoding=3, text="Chazzo Nieuws Update"))
+              id3.add(TALB(encoding=3, text="Chazzo Nieuws Update"))
+
+              cover = os.environ.get("COVER_IMAGE", "stationname.jpg")
+              if os.path.exists(cover):
+                  with open(cover, "rb") as img:
+                      id3.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=img.read()))
+
+              id3.save("stationname.mp3")
+          except Exception as e:
+              print("Waarschuwing: ID3 taggen faalde:", e)
+
+          print("Pipeline voltooid: stationname.txt en stationname.mp3 aangemaakt.")
+          EOF
+
+      - name: Commit and push changes
+        run: |
+          set -e
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          git add stationname.mp3 stationname.txt || true
+          git pull origin main --rebase || true
+
+          if git diff --cached --quiet; then
+            echo "Geen wijzigingen om te committen."
+          else
+            git commit -m "FAST Update: Chazzo Nieuws Update - UTC+2 $(date '+%H:%M')"
+            git push
+          fi
+          
