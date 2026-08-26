@@ -20,7 +20,7 @@ jobs:
       SPEAKER_SAMPLE: "stem_voorbeeld.mp3"
       TTS_MODEL_PREFERRED: "ColletteNeural"
       TTS_MODEL_FALLBACK: "tts_models/multilingual/multi-dataset/xtts_v2"
-      TTS_SPEED_MULTIPLIER: "1.50"
+      TTS_SPEED_MULTIPLIER: "3.50"
       MP3_BITRATE: "128k"
       BRANCH: "main"
       XDG_CACHE_HOME: "/home/runner/.cache"
@@ -140,8 +140,8 @@ jobs:
               summary_sentences.append(parts[2])
 
           # Add intro and outro lines
-          intro = "Dit is de weer update."
-          outro = "Dit was de weer update."
+          intro = "Dit is de weer Update."
+          outro = "Tot zover de weer Update."
           summary = " ".join(summary_sentences)
           summary = " ".join(summary.split())
           final_text = f"{intro} {summary} {outro}"
@@ -168,7 +168,7 @@ jobs:
           SPEAKER = os.environ.get("SPEAKER_SAMPLE", "stem_voorbeeld.mp3")
           PREFERRED = os.environ.get("TTS_MODEL_PREFERRED")
           FALLBACK = os.environ.get("TTS_MODEL_FALLBACK")
-          SPEED = float(os.environ.get("TTS_SPEED_MULTIPLIER", "1.50"))
+          SPEED = float(os.environ.get("TTS_SPEED_MULTIPLIER", "3.50"))
           BITRATE = os.environ.get("MP3_BITRATE", "128k")
 
           if not os.path.exists(OUT_TXT):
@@ -187,7 +187,7 @@ jobs:
           # Desired pitch shift: lower by 10 Hz (approximate via resampling)
           PITCH_DOWN_HZ = 10.0
           # Base pitch reference (heuristic). Lowering relative to this base.
-          BASE_PITCH_HZ = 220.0
+          BASE_PITCH_HZ = 200.0
 
           # First attempt: Coqui TTS (preferred model). If any import/load error occurs, fallback to gTTS.
           try:
@@ -225,7 +225,7 @@ jobs:
                       sp = AudioSegment.from_file(SPEAKER)
                       sp = effects.normalize(sp)
                       sp = sp.low_pass_filter(9000)
-                      sp = sp.high_pass_filter(100)
+                      sp = sp.high_pass_filter(120)
                       sp.export(speaker_wav, format="wav")
                   except Exception as e:
                       print("Waarschuwing bij verwerken speaker sample, maak stille fallback:", e)
@@ -299,7 +299,7 @@ jobs:
           final = voice
           if os.path.exists(NEWSBED):
               try:
-                  bed = AudioSegment.from_file(NEWSBED) - 20
+                  bed = AudioSegment.from_file(NEWSBED) - 15
                   if len(bed) < len(voice) and len(bed) > 0:
                       repeat = math.ceil(len(voice) / len(bed))
                       bed = bed * repeat
