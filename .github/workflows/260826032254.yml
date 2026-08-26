@@ -1,4 +1,4 @@
-name: Text to XTTSv2 FAST 8
+name: Drive TXT to XTTSv2 FAST [9]
 
 on:
   workflow_dispatch:
@@ -21,7 +21,8 @@ jobs:
         with:
           path: |
             ~/.cache/tts
-          key: tts-cache
+            ~/.cache/faster_whisper
+          key: tts-whisper-cache
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -36,20 +37,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
-      - name: Download Text from Google Drive
-        run: |
-          # Download via curl en omzeil de Google Drive groter-dan-vinkje waarschuwing direct naar stationname.txt
-          curl -L "https://google.com" -o input_drive.txt
-
       - name: Run FAST pipeline
         env:
+          DRIVE_TXT_URL: 'https://drive.google.com/uc?export=download&id=1FMLqmvQrtd7hYb_YNV9zI3-GNLvYr-6Z'
           COVER_IMAGE: 'stationname.jpg'
           XTTS_SPEED: '1.50'
         run: |
           python3 - <<'EOF'
           import os
           import math
-          import codecs
+          import requests
+          from datetime import datetime
           from pydub import AudioSegment, effects
           from mutagen.id3 import ID3, TIT2, TALB, APIC, ID3NoHeaderError
 
@@ -73,36 +71,36 @@ jobs:
               BaseDatasetConfig
           ])
 
-          # --- READ & SANITIZE TEXT ---
-          if not os.path.exists("input_drive.txt"):
-              print("Invoerbestand van Google Drive ontbreekt — workflow stopt.")
-              raise SystemExit(1)
+          # --- DOWNLOAD TXT VAN GOOGLE DRIVE ---
+          url = os.environ["DRIVE_TXT_URL"]
+          txt_data = requests.get(url).text.strip()
 
-          with open("input_drive.txt", "r", encoding="utf-8", errors="ignore") as f:
-              raw_text = f.read()
+          if not txt_data:
+              print("TXT bestand is leeg — workflow stopt netjes.")
+              raise SystemExit(0)
 
-          # Hardhandig verwijderen van backslashes en vreemde verborgen escape karakters (\x00 etc)
-          # Dit voorkomt de re.error: bad escape in de XTTS v2 / Python regex engine
-          cleaned_text = raw_text.replace("\\", "")
-          cleaned_text = "".join(ch for ch in cleaned_text if ord(ch) >= 32 or ch in "\n\r\t")
+          # --- DYNAMISCHE INTRO ---
+          hour = datetime.utcnow().hour + 2  # UTC+2
+          if hour < 12:
+              greet = "Goedemorgen"
+          elif hour < 18:
+              greet = "Goedendag"
+          else:
+              greet = "Goedenavond"
 
-          # Alles op één vloeiende regel zetten
-          one_line = " ".join(cleaned_text.splitlines())
-          one_line = " ".join(one_line.split())
+          intro = f"{greet}, dit is het Ultra Radio Nieuws, ik ben Johan de Vries."
 
-          if not one_line.strip() or "Google Drive" in one_line and "virus" in one_line.lower():
-              print("Fout: Bestand is leeg of Google Drive blokkeert de download via een HTML-waarschuwing.")
-              raise SystemExit(1)
+          # --- ULTRA RADIO STIJL ---
+          styled = txt_data.replace("  ", " ").strip()
 
-          if not one_line.endswith((".", "!", "?")):
-              one_line += "."
+          # --- OUTRO ---
+          outro = "Dat was het weer, terug naar de muziek op Ultra Radio!"
 
-          transcript = one_line
+          transcript = f"{intro} {styled} {outro}"
 
+          # --- TXT OPSLAAN ---
           with open("stationname.txt", "w", encoding="utf-8") as f:
               f.write(transcript)
-
-          print(f"Tekst succesvol opgeschoond en ingeladen: {transcript}")
 
           # --- XTTS ---
           from TTS.api import TTS
@@ -143,8 +141,8 @@ jobs:
           except ID3NoHeaderError:
               id3 = ID3()
 
-          id3.add(TIT2(encoding=3, text="Chazzo Nieuws Update"))
-          id3.add(TALB(encoding=3, text="Chazzo Nieuws Update"))
+          id3.add(TIT2(encoding=3, text="Ultra Radio Nieuws Update"))
+          id3.add(TALB(encoding=3, text="Ultra Radio Nieuws Update"))
 
           cover = os.environ["COVER_IMAGE"]
           if os.path.exists(cover):
@@ -167,7 +165,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "Geen wijzigingen om te committen."
           else
-            git commit -m "FAST Update: Chazzo Nieuws Update via Google Drive - UTC+2 $(date '+%H:%M')"
+            git commit -m "FAST Update: Ultra Radio Nieuws - UTC+2 $(date '+%H:%M')"
             git push
           fi
           
