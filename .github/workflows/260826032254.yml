@@ -38,7 +38,7 @@ jobs:
 
       - name: Run FAST pipeline
         env:
-          DRIVE_TXT_URL: 'https://drive.google.com/file/d/1FMLqmvQrtd7hYb_YNV9zI3-GNLvYr-6Z/view?usp=drivesdk'
+          DRIVE_TXT_URL: 'https://drive.google.com/1FMLqmvQrtd7hYb_YNV9zI3-GNLvYr-6Z&export=download'
           COVER_IMAGE: 'stationname.jpg'
           XTTS_SPEED: '1.50'
         run: |
