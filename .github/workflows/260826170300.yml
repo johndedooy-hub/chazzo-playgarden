@@ -1,4 +1,4 @@
-name: Drive TXT to XTTSv2 FAST -10-
+name: Drive TXT to XTTSv2 FAST 10
 
 on:
   workflow_dispatch:
