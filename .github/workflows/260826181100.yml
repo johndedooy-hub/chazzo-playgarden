@@ -1,4 +1,4 @@
-name: RSS to Text to XTTSv2 FAST [15]
+name: RSS to Text to XTTSv2 FAST [16]
 
 on:
   workflow_dispatch:
@@ -33,7 +33,6 @@ jobs:
         run: |
           set -e
           python -m pip install --upgrade pip
-          # Herhaal install met retries kan helpen bij netwerkfluctuaties
           python -m pip install --default-timeout=60 torchcodec || python -m pip install --default-timeout=60 torchcodec
           python -m pip install --default-timeout=60 "transformers<4.40.0" "scipy<1.13.0" pydub mutagen requests python-dateutil TTS || python -m pip install --default-timeout=60 "transformers<4.40.0" "scipy<1.13.0" pydub mutagen requests python-dateutil TTS
           sudo apt-get update
@@ -44,7 +43,6 @@ jobs:
           DRIVE_TXT_URL: 'https://drive.google.com/uc?export=download&id=1FMLqmvQrtd7hYb_YNV9zI3-GNLvYr-6Z'
           COVER_IMAGE: 'stationname.jpg'
           XTTS_SPEED: '1.50'
-          # Zorg dat caches op bekende plek komen
           XDG_CACHE_HOME: '/home/runner/.cache'
           TORCH_HOME: '/home/runner/.cache/torch'
           TRANSFORMERS_CACHE: '/home/runner/.cache/huggingface'
@@ -102,14 +100,24 @@ jobs:
           model_name = "tts_models/multilingual/multi-dataset/xtts_v2"
           model_path = None
           try:
-              # ModelManager.download_model retourneert paden; gebruik die lokale map
               manager = ModelManager()
               print("Start model download via ModelManager:", model_name)
               model_path, config_path, model_item = manager.download_model(model_name)
               print("Model gedownload naar:", model_path)
           except Exception as e:
-              # Als download faalt, geef duidelijke fout en stop
               exit_with(f"Fout bij downloaden XTTS model via ModelManager: {e}", 1)
+
+          # --- SAFE GLOBALS VOOR TORCH LOAD (voorkomt Unsupported global errors) ---
+          try:
+              import torch
+              from TTS.tts.configs.xtts_config import XttsConfig
+              from TTS.tts.models.xtts import XttsAudioConfig, XttsArgs
+              from TTS.config.shared_configs import BaseDatasetConfig
+              # Allowlist de benodigde classes voor torch.load
+              torch.serialization.add_safe_globals([XttsConfig, XttsAudioConfig, XttsArgs, BaseDatasetConfig])
+              print("Torch safe globals toegevoegd.")
+          except Exception as e:
+              print("Waarschuwing: kon torch safe globals niet instellen:", e)
 
           # --- XTTS INITIALISATIE (gebruik lokaal model pad) ---
           try:
@@ -118,7 +126,6 @@ jobs:
               exit_with(f"Fout bij import TTS.api: {e}", 1)
 
           try:
-              # Gebruik het lokale modelpad als TTS dat accepteert; anders val terug op model_name
               tts_source = model_path if model_path else model_name
               tts = TTS(tts_source)
           except Exception as e:
@@ -128,7 +135,7 @@ jobs:
           speaker_src = "stem_voorbeeld.mp3"
           if not os.path.exists(speaker_src):
               print("stem_voorbeeld.mp3 niet gevonden; maak fallback clean_speaker.wav (stil).")
-              silent = AudioSegment.silent(duration=1000)  # 1s silence
+              silent = AudioSegment.silent(duration=1000)
               silent.export("clean_speaker.wav", format="wav")
           else:
               try:
