@@ -1,0 +1,357 @@
+name: Weerbericht Brabant — Generate text + TTS (pitch shift, NL days) 3
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate-weather-and-tts:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    env:
+      LATITUDE: "51.5"
+      LONGITUDE: "5.0"
+      TIMEZONE: "Europe/Amsterdam"
+      OUTPUT_TXT: "weerbericht.txt"
+      OUTPUT_MP3: "weerbericht.mp3"
+      NEWSBED: "newsbed-1.mp3"
+      SPEAKER_SAMPLE: "stem_voorbeeld.mp3"
+      TTS_MODEL_PREFERRED: "ColletteNeural"
+      TTS_MODEL_FALLBACK: "tts_models/multilingual/multi-dataset/xtts_v2"
+      TTS_SPEED_MULTIPLIER: "1.50"
+      MP3_BITRATE: "128k"
+      BRANCH: "main"
+      XDG_CACHE_HOME: "/home/runner/.cache"
+      TORCH_HOME: "/home/runner/.cache/torch"
+      TRANSFORMERS_CACHE: "/home/runner/.cache/huggingface"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system packages and pinned Python deps
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          python -m pip install --default-timeout=60 "transformers==4.29.2"
+          python -m pip install --default-timeout=60 requests pydub mutagen TTS gTTS
+
+      - name: Build current weather text (today, tomorrow, coming days) with NL daynames and intro/outro
+        run: |
+          set -e
+          python3 - <<'PY'
+          import os, sys, datetime
+          import requests
+
+          LAT = os.environ.get("LATITUDE", "51.5")
+          LON = os.environ.get("LONGITUDE", "5.0")
+          TZ = os.environ.get("TIMEZONE", "Europe/Amsterdam")
+          OUT = os.environ.get("OUTPUT_TXT", "weerbericht.txt")
+
+          def fail(msg):
+              print(msg)
+              sys.exit(1)
+
+          url = (
+              "https://api.open-meteo.com/v1/forecast"
+              f"?latitude={LAT}&longitude={LON}"
+              "&hourly=temperature_2m,precipitation,weathercode,windspeed_10m"
+              "&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode"
+              f"&timezone={TZ}"
+          )
+
+          try:
+              r = requests.get(url, timeout=20)
+              r.raise_for_status()
+              data = r.json()
+          except Exception as e:
+              fail(f"Kon weerdata niet ophalen: {e}")
+
+          wc_map = {
+              0: "helder",1: "grotendeels zonnig",2: "wisselend bewolkt",3: "bewolkt",
+              45: "mistig",48: "nevelig",51: "lichte motregen",53: "matige motregen",
+              55: "dichte motregen",61: "lichte regen",63: "matige regen",65: "zware regen",
+              71: "lichte sneeuw",73: "matige sneeuw",75: "zware sneeuw",80: "buien",
+              81: "regelmatige buien",82: "zware buien",95: "onweersbuien"
+          }
+
+          daily = data.get("daily", {})
+          dates = daily.get("time", [])
+          temps_max = daily.get("temperature_2m_max", [])
+          temps_min = daily.get("temperature_2m_min", [])
+          precip_sum = daily.get("precipitation_sum", [])
+          weathercodes = daily.get("weathercode", [])
+
+          if not dates:
+              fail("Geen dagelijkse data beschikbaar van de weer-API.")
+
+          # Map English weekend names to Dutch
+          day_trans = {"Friday":"vrijdag", "Saturday":"zaterdag", "Sunday":"zondag"}
+
+          daily_entries = []
+          for i, d in enumerate(dates):
+              try:
+                  date_obj = datetime.datetime.fromisoformat(d)
+                  dayname = date_obj.strftime("%A")
+                  if dayname in day_trans:
+                      dayname = day_trans[dayname]
+              except Exception:
+                  dayname = d
+              wc = weathercodes[i] if i < len(weathercodes) else None
+              wc_text = wc_map.get(wc, "wisselend weer") if wc is not None else "wisselend weer"
+              tmin = temps_min[i] if i < len(temps_min) else None
+              tmax = temps_max[i] if i < len(temps_max) else None
+              prec = precip_sum[i] if i < len(precip_sum) else 0
+              daily_entries.append({"date": d, "dayname": dayname, "wc_text": wc_text, "tmin": tmin, "tmax": tmax, "prec": prec})
+
+          today = daily_entries[0]
+          tomorrow = daily_entries[1] if len(daily_entries) > 1 else None
+          coming = daily_entries[2:5] if len(daily_entries) > 2 else []
+
+          def fmt_temp(t):
+              return f"{round(t)}°C" if t is not None else "onbekend"
+
+          parts = []
+          parts.append(f"Vandaag in Noord-Brabant: {today['wc_text']}, met maxima rond {fmt_temp(today['tmax'])} en minima rond {fmt_temp(today['tmin'])}. Neerslagkans: {round(today['prec'],1)} mm.")
+          if tomorrow:
+              parts.append(f"Morgen: {tomorrow['wc_text']}, temperaturen rond {fmt_temp(tomorrow['tmax'])}. Neerslagkans: {round(tomorrow['prec'],1)} mm.")
+          if coming:
+              short = []
+              for d in coming:
+                  short.append(f"{d['dayname']}: {d['wc_text']}, {fmt_temp(d['tmax'])}")
+              parts.append("Komende dagen: " + "; ".join(short) + ".")
+
+          summary_sentences = []
+          summary_sentences.append(parts[0])
+          if tomorrow:
+              summary_sentences.append(parts[1])
+          if coming:
+              summary_sentences.append(parts[2])
+
+          # Add intro and outro lines
+          intro = "Dit is de weer update."
+          outro = "Dit was de weer update."
+          summary = " ".join(summary_sentences)
+          summary = " ".join(summary.split())
+          final_text = f"{intro} {summary} {outro}"
+
+          try:
+              with open(OUT, "w", encoding="utf-8") as f:
+                  f.write(final_text + "\n")
+              print("Weerbericht geschreven naar", OUT)
+          except Exception as e:
+              fail(f"Kon niet schrijven naar {OUT}: {e}")
+          PY
+
+      - name: Generate speech (try ColletteNeural, fallback to gTTS), apply pitch -10Hz, overlay newsbed
+        run: |
+          set -e
+          python3 - <<'PY'
+          import os, sys, math
+          from pydub import AudioSegment, effects
+          from mutagen.id3 import ID3, TIT2, TALB, ID3NoHeaderError
+
+          OUT_TXT = os.environ.get("OUTPUT_TXT", "weerbericht.txt")
+          OUT_MP3 = os.environ.get("OUTPUT_MP3", "weerbericht.mp3")
+          NEWSBED = os.environ.get("NEWSBED", "newsbed-1.mp3")
+          SPEAKER = os.environ.get("SPEAKER_SAMPLE", "stem_voorbeeld.mp3")
+          PREFERRED = os.environ.get("TTS_MODEL_PREFERRED")
+          FALLBACK = os.environ.get("TTS_MODEL_FALLBACK")
+          SPEED = float(os.environ.get("TTS_SPEED_MULTIPLIER", "1.50"))
+          BITRATE = os.environ.get("MP3_BITRATE", "128k")
+
+          if not os.path.exists(OUT_TXT):
+              print("Input text not found:", OUT_TXT)
+              sys.exit(1)
+
+          with open(OUT_TXT, "r", encoding="utf-8") as f:
+              text = f.read().strip()
+          if not text:
+              print("Geen tekst in", OUT_TXT)
+              sys.exit(1)
+
+          raw_wav = "raw_weer.wav"
+          used_engine = None
+
+          # Desired pitch shift: lower by 10 Hz (approximate via resampling)
+          PITCH_DOWN_HZ = 10.0
+          # Base pitch reference (heuristic). Lowering relative to this base.
+          BASE_PITCH_HZ = 220.0
+
+          # First attempt: Coqui TTS (preferred model). If any import/load error occurs, fallback to gTTS.
+          try:
+              try:
+                  from TTS.utils.manage import ModelManager
+                  def _skip_tos(self, output_path):
+                      print("CPML TOS automatisch geaccepteerd (CI).")
+                      return True
+                  ModelManager.ask_tos = _skip_tos
+              except Exception:
+                  pass
+
+              from TTS.api import TTS
+              tts_source = None
+              try:
+                  from TTS.utils.manage import ModelManager
+                  manager = ModelManager()
+                  try:
+                      model_local, config_path, model_item = manager.download_model(PREFERRED)
+                      tts_source = model_local or PREFERRED
+                      print("Voorkeursmodel beschikbaar:", tts_source)
+                  except Exception as e:
+                      print("Voorkeursmodel niet beschikbaar via manager:", e)
+                      tts_source = FALLBACK
+              except Exception:
+                  tts_source = PREFERRED or FALLBACK
+
+              print("Probeer TTS met bron:", tts_source)
+              tts = TTS(tts_source)
+
+              # Prepare speaker wav (use provided sample or silent fallback)
+              speaker_wav = "clean_speaker.wav"
+              if os.path.exists(SPEAKER):
+                  try:
+                      sp = AudioSegment.from_file(SPEAKER)
+                      sp = effects.normalize(sp)
+                      sp = sp.low_pass_filter(9000)
+                      sp = sp.high_pass_filter(100)
+                      sp.export(speaker_wav, format="wav")
+                  except Exception as e:
+                      print("Waarschuwing bij verwerken speaker sample, maak stille fallback:", e)
+                      AudioSegment.silent(duration=1000).export(speaker_wav, format="wav")
+              else:
+                  AudioSegment.silent(duration=1000).export(speaker_wav, format="wav")
+
+              # Generate TTS to raw wav
+              try:
+                  tts.tts_to_file(
+                      text=text,
+                      speaker_wav=speaker_wav,
+                      language="nl",
+                      file_path=raw_wav,
+                      speed=SPEED
+                  )
+              except TypeError:
+                  tts.tts_to_file(
+                      text=text,
+                      language="nl",
+                      file_path=raw_wav,
+                      speed=SPEED
+                  )
+
+              if not os.path.exists(raw_wav):
+                  raise RuntimeError("TTS engine rapporteerde geen outputbestand.")
+              used_engine = "coqui"
+              print("TTS via Coqui voltooid.")
+          except Exception as e:
+              print("Coqui TTS faalde of niet compatibel:", e)
+              print("Fallback: gebruik gTTS (online Google TTS).")
+              try:
+                  from gtts import gTTS
+                  tts = gTTS(text, lang="nl")
+                  tts.save(raw_wav)
+                  used_engine = "gTTS"
+                  print("gTTS fallback voltooid.")
+              except Exception as e2:
+                  print("gTTS fallback faalde:", e2)
+                  sys.exit(1)
+
+          # Load voice
+          try:
+              voice = AudioSegment.from_file(raw_wav)
+          except Exception as e:
+              print("Fout bij laden raw wav:", e)
+              sys.exit(1)
+
+          # Apply pitch shift: lower by ~10 Hz using resampling heuristic
+          try:
+              base = BASE_PITCH_HZ
+              down = PITCH_DOWN_HZ
+              factor = (base - down) / base
+              if factor <= 0:
+                  factor = 0.98
+              new_rate = int(voice.frame_rate * factor)
+              pitched = voice._spawn(voice.raw_data, overrides={"frame_rate": new_rate})
+              # Keep original playback rate by setting frame_rate back to standard (e.g., 44100)
+              pitched = pitched.set_frame_rate(voice.frame_rate)
+              voice = pitched
+              print(f"Pitch aangepast: ongeveer -{int(down)}Hz (factor {factor:.4f}).")
+          except Exception as e:
+              print("Waarschuwing bij pitch shift:", e)
+
+          # Normalize after pitch change
+          try:
+              voice = effects.normalize(voice)
+          except Exception:
+              pass
+
+          final = voice
+          if os.path.exists(NEWSBED):
+              try:
+                  bed = AudioSegment.from_file(NEWSBED) - 20
+                  if len(bed) < len(voice) and len(bed) > 0:
+                      repeat = math.ceil(len(voice) / len(bed))
+                      bed = bed * repeat
+                  bed = bed[:len(voice)]
+                  final = bed.overlay(voice)
+              except Exception as e:
+                  print("Waarschuwing bij newsbed overlay:", e)
+                  final = voice
+
+          try:
+              final.export(OUT_MP3, format="mp3", bitrate=BITRATE)
+          except Exception as e:
+              print("Fout bij export mp3:", e)
+              sys.exit(1)
+
+          # Add simple ID3 tags
+          try:
+              try:
+                  id3 = ID3(OUT_MP3)
+              except ID3NoHeaderError:
+                  id3 = ID3()
+              id3.add(TIT2(encoding=3, text="Weerbericht Brabant"))
+              id3.add(TALB(encoding=3, text="Weerbericht Brabant"))
+              id3.save(OUT_MP3)
+          except Exception:
+              pass
+
+          print("TTS generatie voltooid:", OUT_MP3, " (engine:", used_engine, ")")
+          PY
+
+      - name: Commit and push generated files (always)
+        env:
+          GIT_COMMITTER_NAME: "github-actions[bot]"
+          GIT_COMMITTER_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com"
+        run: |
+          set -e
+          git config --local user.email "$GIT_COMMITTER_EMAIL"
+          git config --local user.name "$GIT_COMMITTER_NAME"
+
+          git checkout -B "$BRANCH"
+
+          git add -A "${OUTPUT_TXT}" "${OUTPUT_MP3}" || true
+
+          if git diff --staged --quiet; then
+            git commit --allow-empty -m "Weerbericht update (manual run) - $(date -u '+%Y-%m-%d %H:%M UTC')"
+          else
+            git commit -m "Weerbericht update (manual run) - $(date -u '+%Y-%m-%d %H:%M UTC')"
+          fi
+
+          git push --set-upstream origin "$BRANCH" --force-with-lease
+
+      - name: Final status
+        run: |
+          echo "Workflow voltooid. Bestand(en): ${OUTPUT_TXT}, ${OUTPUT_MP3}"
+          
