@@ -1,4 +1,4 @@
-name: Text to XTTSv2 FAST [6]
+name: Text to XTTSv2 FAST [7]
 
 on:
   workflow_dispatch:
@@ -38,7 +38,7 @@ jobs:
 
       - name: Run FAST pipeline
         env:
-          DRIVE_TXT_URL: 'https://drive.google.com/1FMLqmvQrtd7hYb_YNV9zI3-GNLvYr-6Z&export=download'
+          DRIVE_TXT_URL: 'https://google.com'
           COVER_IMAGE: 'stationname.jpg'
           XTTS_SPEED: '1.50'
         run: |
@@ -159,4 +159,3 @@ jobs:
             git commit -m "FAST Update: Chazzo Nieuws Update via Google Drive - UTC+2 $(date '+%H:%M')"
             git push
           fi
-          
