@@ -1,4 +1,4 @@
-name: Text to XTTSv2 FAST [7]
+name: Text to XTTSv2 FAST 8
 
 on:
   workflow_dispatch:
@@ -36,16 +36,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
+      - name: Download Text from Google Drive
+        run: |
+          # Download via curl en omzeil de Google Drive groter-dan-vinkje waarschuwing direct naar stationname.txt
+          curl -L "https://google.com" -o input_drive.txt
+
       - name: Run FAST pipeline
         env:
-          DRIVE_TXT_URL: 'https://google.com'
           COVER_IMAGE: 'stationname.jpg'
           XTTS_SPEED: '1.50'
         run: |
           python3 - <<'EOF'
           import os
           import math
-          import requests
+          import codecs
           from pydub import AudioSegment, effects
           from mutagen.id3 import ID3, TIT2, TALB, APIC, ID3NoHeaderError
 
@@ -69,19 +73,26 @@ jobs:
               BaseDatasetConfig
           ])
 
-          # --- TEXT FROM DRIVE ---
-          txt_url = os.environ["DRIVE_TXT_URL"]
-          response = requests.get(txt_url)
-          response.raise_for_status()
-          raw_text = response.text
+          # --- READ & SANITIZE TEXT ---
+          if not os.path.exists("input_drive.txt"):
+              print("Invoerbestand van Google Drive ontbreekt — workflow stopt.")
+              raise SystemExit(1)
 
-          # Opschonen van de tekst (alles op één regel, dubbele spaties weg)
-          one_line = " ".join(raw_text.splitlines())
+          with open("input_drive.txt", "r", encoding="utf-8", errors="ignore") as f:
+              raw_text = f.read()
+
+          # Hardhandig verwijderen van backslashes en vreemde verborgen escape karakters (\x00 etc)
+          # Dit voorkomt de re.error: bad escape in de XTTS v2 / Python regex engine
+          cleaned_text = raw_text.replace("\\", "")
+          cleaned_text = "".join(ch for ch in cleaned_text if ord(ch) >= 32 or ch in "\n\r\t")
+
+          # Alles op één vloeiende regel zetten
+          one_line = " ".join(cleaned_text.splitlines())
           one_line = " ".join(one_line.split())
 
-          if not one_line.strip():
-              print("Het gedownloade tekstbestand is leeg — workflow stopt netjes.")
-              raise SystemExit(0)
+          if not one_line.strip() or "Google Drive" in one_line and "virus" in one_line.lower():
+              print("Fout: Bestand is leeg of Google Drive blokkeert de download via een HTML-waarschuwing.")
+              raise SystemExit(1)
 
           if not one_line.endswith((".", "!", "?")):
               one_line += "."
@@ -91,7 +102,7 @@ jobs:
           with open("stationname.txt", "w", encoding="utf-8") as f:
               f.write(transcript)
 
-          print(f"Tekst succesvol ingeladen: {transcript}")
+          print(f"Tekst succesvol opgeschoond en ingeladen: {transcript}")
 
           # --- XTTS ---
           from TTS.api import TTS
@@ -159,3 +170,4 @@ jobs:
             git commit -m "FAST Update: Chazzo Nieuws Update via Google Drive - UTC+2 $(date '+%H:%M')"
             git push
           fi
+          
