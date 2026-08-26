@@ -20,7 +20,7 @@ jobs:
       SPEAKER_SAMPLE: "stem_voorbeeld.mp3"
       TTS_MODEL_PREFERRED: "ColletteNeural"
       TTS_MODEL_FALLBACK: "tts_models/multilingual/multi-dataset/xtts_v2"
-      TTS_SPEED_MULTIPLIER: "1.02"
+      TTS_SPEED_MULTIPLIER: "1.50"
       MP3_BITRATE: "128k"
       BRANCH: "main"
       XDG_CACHE_HOME: "/home/runner/.cache"
@@ -161,7 +161,7 @@ jobs:
           SPEAKER = os.environ.get("SPEAKER_SAMPLE", "stem_voorbeeld.mp3")
           PREFERRED = os.environ.get("TTS_MODEL_PREFERRED")
           FALLBACK = os.environ.get("TTS_MODEL_FALLBACK")
-          SPEED = float(os.environ.get("TTS_SPEED_MULTIPLIER", "1.02"))
+          SPEED = float(os.environ.get("TTS_SPEED_MULTIPLIER", "1.50"))
           BITRATE = os.environ.get("MP3_BITRATE", "128k")
 
           if not os.path.exists(OUT_TXT):
