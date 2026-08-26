@@ -40,7 +40,7 @@ jobs:
       - name: Run FAST pipeline
         env:
          run: |
-          DRIVE_FILE_ID="1FMLqmvQrtd7hYb_YNV9zI3-GNLvYr-6Z"
+          RSS_URL="1FMLqmvQrtd7hYb_YNV9zI3-GNLvYr-6Z"
           wget --quiet "https://drive.google.com/uc?id=${DRIVE_FILE_ID}&export=download" -O Focus-Regio-Blok.txt
           COVER_IMAGE: 'stationname.jpg'
           XTTS_SPEED: '1.50'
