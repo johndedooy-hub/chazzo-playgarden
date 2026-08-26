@@ -1,4 +1,4 @@
-name: Weerbericht Brabant — Generate text + TTS 1
+name: Weerbericht Brabant — Generate text + TTS (fixed transformers) 2
 
 on:
   workflow_dispatch:
@@ -11,7 +11,6 @@ jobs:
       contents: write
 
     env:
-      # Coordinates roughly central for Noord-Brabant (used by Open-Meteo)
       LATITUDE: "51.5"
       LONGITUDE: "5.0"
       TIMEZONE: "Europe/Amsterdam"
@@ -39,19 +38,22 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install system packages and pinned Python deps (fix BeamSearchScorer)
         run: |
           set -e
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
+          # Pin transformers to a version compatible with TTS to avoid BeamSearchScorer import errors
+          python -m pip install --default-timeout=60 "transformers==4.29.2"
+          # Then install TTS and other deps
           python -m pip install --default-timeout=60 requests pydub mutagen TTS
 
       - name: Build current weather text (today, tomorrow, coming days)
         run: |
           set -e
           python3 - <<'PY'
-          import os, sys, datetime, math
+          import os, sys, datetime
           import requests
 
           LAT = os.environ.get("LATITUDE", "51.5")
@@ -63,7 +65,6 @@ jobs:
               print(msg)
               sys.exit(1)
 
-          # Open-Meteo API call (no API key required)
           url = (
               "https://api.open-meteo.com/v1/forecast"
               f"?latitude={LAT}&longitude={LON}"
@@ -79,39 +80,14 @@ jobs:
           except Exception as e:
               fail(f"Kon weerdata niet ophalen: {e}")
 
-          # Helper: map weathercode to human text (Open-Meteo codes)
           wc_map = {
-              0: "helder",
-              1: "grotendeels zonnig",
-              2: "wisselend bewolkt",
-              3: "bewolkt",
-              45: "mistig",
-              48: "nevelig",
-              51: "lichte motregen",
-              53: "matige motregen",
-              55: "dichte motregen",
-              56: "lichte bevriezende motregen",
-              57: "dichte bevriezende motregen",
-              61: "lichte regen",
-              63: "matige regen",
-              65: "zware regen",
-              66: "lichte bevriezende regen",
-              67: "zware bevriezende regen",
-              71: "lichte sneeuw",
-              73: "matige sneeuw",
-              75: "zware sneeuw",
-              77: "hagel",
-              80: "buien",
-              81: "regelmatige buien",
-              82: "zware buien",
-              85: "lichte sneeuwbuien",
-              86: "zware sneeuwbuien",
-              95: "onweersbuien",
-              96: "onweersbuien met hagel",
-              99: "zware onweersbuien met hagel"
+              0: "helder",1: "grotendeels zonnig",2: "wisselend bewolkt",3: "bewolkt",
+              45: "mistig",48: "nevelig",51: "lichte motregen",53: "matige motregen",
+              55: "dichte motregen",61: "lichte regen",63: "matige regen",65: "zware regen",
+              71: "lichte sneeuw",73: "matige sneeuw",75: "zware sneeuw",80: "buien",
+              81: "regelmatige buien",82: "zware buien",95: "onweersbuien"
           }
 
-          # Extract daily summary for today and next days
           daily = data.get("daily", {})
           dates = daily.get("time", [])
           temps_max = daily.get("temperature_2m_max", [])
@@ -122,29 +98,20 @@ jobs:
           if not dates:
               fail("Geen dagelijkse data beschikbaar van de weer-API.")
 
-          # Build readable daily entries
           daily_entries = []
           for i, d in enumerate(dates):
               try:
                   date_obj = datetime.datetime.fromisoformat(d)
+                  dayname = date_obj.strftime("%A")
               except Exception:
-                  date_obj = None
-              dayname = date_obj.strftime("%A") if date_obj else d
+                  dayname = d
               wc = weathercodes[i] if i < len(weathercodes) else None
               wc_text = wc_map.get(wc, "wisselend weer") if wc is not None else "wisselend weer"
               tmin = temps_min[i] if i < len(temps_min) else None
               tmax = temps_max[i] if i < len(temps_max) else None
               prec = precip_sum[i] if i < len(precip_sum) else 0
-              daily_entries.append({
-                  "date": d,
-                  "dayname": dayname,
-                  "wc_text": wc_text,
-                  "tmin": tmin,
-                  "tmax": tmax,
-                  "prec": prec
-              })
+              daily_entries.append({"date": d, "dayname": dayname, "wc_text": wc_text, "tmin": tmin, "tmax": tmax, "prec": prec})
 
-          # Compose concise summary similar to assistant style: today, tomorrow, coming days
           today = daily_entries[0]
           tomorrow = daily_entries[1] if len(daily_entries) > 1 else None
           coming = daily_entries[2:5] if len(daily_entries) > 2 else []
@@ -162,20 +129,14 @@ jobs:
                   short.append(f"{d['dayname']}: {d['wc_text']}, {fmt_temp(d['tmax'])}")
               parts.append("Komende dagen: " + "; ".join(short) + ".")
 
-          # Final one-minute style paragraph (3 sentences max)
-          # Keep it concise: today, tomorrow, brief coming days
           summary_sentences = []
-          # Today sentence
           summary_sentences.append(parts[0])
-          # Tomorrow sentence
           if tomorrow:
               summary_sentences.append(parts[1])
-          # Coming days sentence (combine)
           if coming:
               summary_sentences.append(parts[2])
 
           summary = " ".join(summary_sentences)
-          # Tidy spacing
           summary = " ".join(summary.split())
 
           try:
@@ -192,7 +153,7 @@ jobs:
           python3 - <<'PY'
           import os, sys, math
           from pydub import AudioSegment, effects
-          from mutagen.id3 import ID3, TIT2, TALB, APIC, ID3NoHeaderError
+          from mutagen.id3 import ID3, TIT2, TALB, ID3NoHeaderError
 
           OUT_TXT = os.environ.get("OUTPUT_TXT", "weerbericht.txt")
           OUT_MP3 = os.environ.get("OUTPUT_MP3", "weerbericht.mp3")
@@ -223,7 +184,7 @@ jobs:
           except Exception as e:
               print("Waarschuwing CPML TOS override:", e)
 
-          # Try to download preferred model; fallback if necessary
+          # Pre-download model (preferred then fallback)
           model_to_use = PREFERRED or FALLBACK
           model_local = None
           try:
@@ -244,7 +205,7 @@ jobs:
           except Exception as e:
               print("Waarschuwing bij model download:", e)
 
-          # Add torch safe globals for known TTS classes to avoid weights_only errors
+          # Add torch safe globals (best effort)
           try:
               import torch
               from TTS.tts.configs.xtts_config import XttsConfig
@@ -301,7 +262,6 @@ jobs:
                   speed=SPEED
               )
           except TypeError:
-              # Some models don't accept speaker_wav; try without it
               try:
                   tts.tts_to_file(
                       text=text,
@@ -320,11 +280,9 @@ jobs:
               print("raw wav niet aangemaakt:", raw_wav)
               sys.exit(1)
 
-          # Load voice and normalize
           voice = AudioSegment.from_file(raw_wav)
           voice = effects.normalize(voice)
 
-          # Overlay newsbed if present
           final = voice
           if os.path.exists(NEWSBED):
               try:
@@ -338,14 +296,12 @@ jobs:
                   print("Waarschuwing bij newsbed overlay:", e)
                   final = voice
 
-          # Export final mp3
           try:
               final.export(OUT_MP3, format="mp3", bitrate=BITRATE)
           except Exception as e:
               print("Fout bij export mp3:", e)
               sys.exit(1)
 
-          # Add simple ID3 tags
           try:
               try:
                   id3 = ID3(OUT_MP3)
@@ -353,9 +309,6 @@ jobs:
                   id3 = ID3()
               id3.add(TIT2(encoding=3, text="Weerbericht Brabant"))
               id3.add(TALB(encoding=3, text="Weerbericht Brabant"))
-              if os.path.exists(NEWSBED):
-                  # If newsbed is an image file path, attach; otherwise skip
-                  pass
               id3.save(OUT_MP3)
           except Exception:
               pass
@@ -374,7 +327,6 @@ jobs:
 
           git checkout -B "$BRANCH"
 
-          # Ensure files are present in index
           git add -A "${OUTPUT_TXT}" "${OUTPUT_MP3}" || true
 
           if git diff --staged --quiet; then
@@ -383,7 +335,6 @@ jobs:
             git commit -m "Weerbericht update (manual run) - $(date -u '+%Y-%m-%d %H:%M UTC')"
           fi
 
-          # Push using the provided token/permissions
           git push --set-upstream origin "$BRANCH" --force-with-lease
 
       - name: Final status
