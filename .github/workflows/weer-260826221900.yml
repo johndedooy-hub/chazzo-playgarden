@@ -1,4 +1,4 @@
-name: Weerbericht Brabant — Generate text + TTS (fixed transformers) 2
+name: Weerbericht Brabant — Generate text + TTS (robust fallback) 3
 
 on:
   workflow_dispatch:
@@ -38,16 +38,16 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install system packages and pinned Python deps (fix BeamSearchScorer)
+      - name: Install system packages and pinned Python deps
         run: |
           set -e
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
-          # Pin transformers to a version compatible with TTS to avoid BeamSearchScorer import errors
+          # Pin transformers to a version known to work with many TTS releases
           python -m pip install --default-timeout=60 "transformers==4.29.2"
-          # Then install TTS and other deps
-          python -m pip install --default-timeout=60 requests pydub mutagen TTS
+          # Install TTS (Coqui) and helpful audio libs; also install fallback gTTS
+          python -m pip install --default-timeout=60 requests pydub mutagen TTS gTTS
 
       - name: Build current weather text (today, tomorrow, coming days)
         run: |
@@ -147,7 +147,7 @@ jobs:
               fail(f"Kon niet schrijven naar {OUT}: {e}")
           PY
 
-      - name: Generate speech (TTS) and overlay newsbed
+      - name: Generate speech (try ColletteNeural, fallback to gTTS) and overlay newsbed
         run: |
           set -e
           python3 - <<'PY'
@@ -174,114 +174,98 @@ jobs:
               print("Geen tekst in", OUT_TXT)
               sys.exit(1)
 
-          # CPML TOS override for CI
-          try:
-              from TTS.utils.manage import ModelManager
-              def _skip_tos(self, output_path):
-                  print("CPML TOS automatisch geaccepteerd (CI).")
-                  return True
-              ModelManager.ask_tos = _skip_tos
-          except Exception as e:
-              print("Waarschuwing CPML TOS override:", e)
-
-          # Pre-download model (preferred then fallback)
-          model_to_use = PREFERRED or FALLBACK
-          model_local = None
-          try:
-              from TTS.utils.manage import ModelManager
-              manager = ModelManager()
-              try:
-                  model_local, config_path, model_item = manager.download_model(model_to_use)
-                  print("Model gedownload naar:", model_local)
-              except Exception as e:
-                  print("Kon voorkeursmodel niet downloaden:", e)
-                  if FALLBACK and model_to_use != FALLBACK:
-                      try:
-                          model_local, config_path, model_item = manager.download_model(FALLBACK)
-                          model_to_use = FALLBACK
-                          print("Fallback model gedownload naar:", model_local)
-                      except Exception as e2:
-                          print("Fallback model download faalde:", e2)
-          except Exception as e:
-              print("Waarschuwing bij model download:", e)
-
-          # Add torch safe globals (best effort)
-          try:
-              import torch
-              from TTS.tts.configs.xtts_config import XttsConfig
-              from TTS.tts.models.xtts import XttsAudioConfig, XttsArgs
-              from TTS.config.shared_configs import BaseDatasetConfig
-              torch.serialization.add_safe_globals([XttsConfig, XttsAudioConfig, XttsArgs, BaseDatasetConfig])
-              print("Torch safe globals toegevoegd.")
-          except Exception:
-              pass
-
-          # Initialize TTS
-          try:
-              from TTS.api import TTS
-          except Exception as e:
-              print("Fout bij import TTS.api:", e)
-              sys.exit(1)
-
-          tts_source = model_local if model_local else model_to_use
-          try:
-              tts = TTS(tts_source)
-          except Exception as e:
-              print("Fout bij laden model:", e)
-              # Try fallback by name
-              try:
-                  tts = TTS(FALLBACK)
-                  print("Fallback TTS geladen.")
-              except Exception as e2:
-                  print("Kon geen TTS model laden:", e2)
-                  sys.exit(1)
-
-          # Prepare speaker wav (use provided sample or silent fallback)
-          speaker_wav = "clean_speaker.wav"
-          if os.path.exists(SPEAKER):
-              try:
-                  sp = AudioSegment.from_file(SPEAKER)
-                  sp = effects.normalize(sp)
-                  sp = sp.low_pass_filter(9000)
-                  sp = sp.high_pass_filter(100)
-                  sp.export(speaker_wav, format="wav")
-              except Exception as e:
-                  print("Waarschuwing bij verwerken speaker sample, maak stille fallback:", e)
-                  AudioSegment.silent(duration=1000).export(speaker_wav, format="wav")
-          else:
-              AudioSegment.silent(duration=1000).export(speaker_wav, format="wav")
-
-          # Generate TTS to raw wav
           raw_wav = "raw_weer.wav"
+          used_engine = None
+
+          # First attempt: Coqui TTS (preferred model). If any import/load error occurs, fallback to gTTS.
           try:
-              tts.tts_to_file(
-                  text=text,
-                  speaker_wav=speaker_wav,
-                  language="nl",
-                  file_path=raw_wav,
-                  speed=SPEED
-              )
-          except TypeError:
+              # CPML TOS override for CI
               try:
+                  from TTS.utils.manage import ModelManager
+                  def _skip_tos(self, output_path):
+                      print("CPML TOS automatisch geaccepteerd (CI).")
+                      return True
+                  ModelManager.ask_tos = _skip_tos
+              except Exception:
+                  pass
+
+              from TTS.api import TTS
+              # Try to load preferred model; if not available, fallback to fallback model name
+              tts_source = None
+              try:
+                  # If model is already downloaded, ModelManager may return a local path; try to use it
+                  from TTS.utils.manage import ModelManager
+                  manager = ModelManager()
+                  try:
+                      model_local, config_path, model_item = manager.download_model(PREFERRED)
+                      tts_source = model_local or PREFERRED
+                      print("Voorkeursmodel beschikbaar:", tts_source)
+                  except Exception as e:
+                      print("Voorkeursmodel niet beschikbaar via manager:", e)
+                      tts_source = FALLBACK
+              except Exception:
+                  tts_source = PREFERRED or FALLBACK
+
+              print("Probeer TTS met bron:", tts_source)
+              tts = TTS(tts_source)
+              # Prepare speaker wav (use provided sample or silent fallback)
+              speaker_wav = "clean_speaker.wav"
+              if os.path.exists(SPEAKER):
+                  try:
+                      sp = AudioSegment.from_file(SPEAKER)
+                      sp = effects.normalize(sp)
+                      sp = sp.low_pass_filter(9000)
+                      sp = sp.high_pass_filter(100)
+                      sp.export(speaker_wav, format="wav")
+                  except Exception as e:
+                      print("Waarschuwing bij verwerken speaker sample, maak stille fallback:", e)
+                      AudioSegment.silent(duration=1000).export(speaker_wav, format="wav")
+              else:
+                  AudioSegment.silent(duration=1000).export(speaker_wav, format="wav")
+
+              # Generate TTS to raw wav
+              try:
+                  tts.tts_to_file(
+                      text=text,
+                      speaker_wav=speaker_wav,
+                      language="nl",
+                      file_path=raw_wav,
+                      speed=SPEED
+                  )
+              except TypeError:
+                  # Some models don't accept speaker_wav
                   tts.tts_to_file(
                       text=text,
                       language="nl",
                       file_path=raw_wav,
                       speed=SPEED
                   )
-              except Exception as e:
-                  print("Fout tijdens TTS generatie:", e)
-                  sys.exit(1)
+
+              if not os.path.exists(raw_wav):
+                  raise RuntimeError("TTS engine rapporteerde geen outputbestand.")
+              used_engine = "coqui"
+              print("TTS via Coqui voltooid.")
           except Exception as e:
-              print("Fout tijdens TTS generatie:", e)
-              sys.exit(1)
+              print("Coqui TTS faalde of niet compatibel:", e)
+              print("Fallback: gebruik gTTS (online Google TTS).")
+              # Fallback: gTTS (werkt online en vereist geen transformers)
+              try:
+                  from gtts import gTTS
+                  tts = gTTS(text, lang="nl")
+                  tts.save(raw_wav)
+                  used_engine = "gTTS"
+                  print("gTTS fallback voltooid.")
+              except Exception as e2:
+                  print("gTTS fallback faalde:", e2)
+                  sys.exit(1)
 
-          if not os.path.exists(raw_wav):
-              print("raw wav niet aangemaakt:", raw_wav)
+          # Load voice and normalize
+          try:
+              voice = AudioSegment.from_file(raw_wav)
+              voice = effects.normalize(voice)
+          except Exception as e:
+              print("Fout bij laden raw wav:", e)
               sys.exit(1)
-
-          voice = AudioSegment.from_file(raw_wav)
-          voice = effects.normalize(voice)
 
           final = voice
           if os.path.exists(NEWSBED):
@@ -302,6 +286,7 @@ jobs:
               print("Fout bij export mp3:", e)
               sys.exit(1)
 
+          # Add simple ID3 tags
           try:
               try:
                   id3 = ID3(OUT_MP3)
@@ -313,7 +298,7 @@ jobs:
           except Exception:
               pass
 
-          print("TTS generatie voltooid:", OUT_MP3)
+          print("TTS generatie voltooid:", OUT_MP3, " (engine:", used_engine, ")")
           PY
 
       - name: Commit and push generated files (always)
