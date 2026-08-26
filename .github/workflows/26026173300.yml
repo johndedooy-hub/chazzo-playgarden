@@ -1,4 +1,4 @@
-name: RSS to Text to XTTSv2 FAST [11]
+name: RSS to Text to XTTSv2 FAST [12]
 
 on:
   workflow_dispatch:
@@ -46,7 +46,6 @@ jobs:
           python3 - <<'EOF'
           import os
           import requests
-          from datetime import datetime
           from pydub import AudioSegment, effects
           from mutagen.id3 import ID3, TIT2, TALB, APIC, ID3NoHeaderError
 
@@ -58,32 +57,8 @@ jobs:
               print("TXT bestand is leeg — workflow stopt netjes.")
               raise SystemExit(0)
 
-          # --- SPLIT IN ZINNEN ---
-          import re
-          sentences = re.split(r'(?<=[.!?])\s+', txt_data)
-          sentences = [s.strip() for s in sentences if s.strip()]
-
-          # --- VERWIJDER EERSTE EN LAATSTE ZIN ---
-          if len(sentences) > 2:
-              sentences = sentences[1:-1]
-
-          cleaned_txt = " ".join(sentences).strip()
-
-          # --- INTRO ---
-          hour = datetime.utcnow().hour + 2
-          if hour < 12:
-              greet = "Goedemorgen"
-          elif hour < 18:
-              greet = "Goedendag"
-          else:
-              greet = "Goedenavond"
-
-          intro = f"{greet}, dit is het Ultra Radio Nieuws, ik ben Johan de Vries."
-
-          # --- OUTRO ---
-          outro = "Dat was het weer, terug naar de muziek op Ultra Radio!"
-
-          transcript = f"{intro} {cleaned_txt} {outro}"
+          # --- TXT DIRECT GEBRUIKEN (GEEN INTRO/OUTRO, GEEN ZINVERWIJDERING) ---
+          transcript = txt_data
 
           # --- TXT OPSLAAN ---
           with open("stationname.txt", "w", encoding="utf-8") as f:
@@ -155,3 +130,4 @@ jobs:
             git commit -m "FAST Update: Chazzo Nieuws Update - UTC+2 $(date '+%H:%M')"
             git push
           fi
+          
