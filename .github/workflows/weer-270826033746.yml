@@ -1,4 +1,4 @@
-name: RSS Text to XTTSv2 WEER X1
+name: RSS Text to XTTSv2 WEER X2
 
 on:
   workflow_dispatch:
