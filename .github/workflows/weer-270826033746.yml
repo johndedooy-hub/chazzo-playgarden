@@ -46,7 +46,7 @@ jobs:
           XTTS_SPEED: '1.65'
 
           # Pitch 5% lager
-          PITCH_FACTOR: '1.25'
+          PITCH_FACTOR: '0.90'
 
         run: |
           python3 - <<'EOF'
@@ -235,12 +235,12 @@ jobs:
           # ============================================================
           # STEM IETS LAGER MAKEN
           #
-          # PITCH_FACTOR 0.95 = ongeveer 7% lager.
+          # PITCH_FACTOR 0.90 = ongeveer 7% lager.
           # Het tempo blijft hierbij vrijwel gelijk.
           # ============================================================
 
           pitch_factor = float(
-              os.environ.get("PITCH_FACTOR", "1.05")
+              os.environ.get("PITCH_FACTOR", "0.90")
           )
 
           pitch_output = "voice_pitched.wav"
