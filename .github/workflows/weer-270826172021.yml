@@ -39,7 +39,7 @@ jobs:
 
       - name: Run TEXT pipeline
         env:
-          RSS_URL: 'https://weerlive.nl/api/weerlive_api_v2.php?key=demo&locatie=Steenbergen'
+          RSS_URL: 'https://www.bd.nl/binnenland/rss.xml'
           COVER_IMAGE: 'weerbericht.jpg'
 
           # Iets sneller spreken
