@@ -1,4 +1,4 @@
-name: RSS Text to XTTSv2 WEER X2
+name: RSS Text to XTTSv2 WEER X3
 
 on:
   workflow_dispatch:
@@ -40,13 +40,13 @@ jobs:
       - name: Run TEXT pipeline
         env:
           RSS_URL: 'https://data.buienradar.nl/1.0/feed/xml/rssbuienradar'
-          COVER_IMAGE: 'stationname.jpg'
+          COVER_IMAGE: 'weerbericht.jpg'
 
           # Iets sneller spreken
-          XTTS_SPEED: '1.58'
+          XTTS_SPEED: '1.75'
 
           # Pitch 5% lager
-          PITCH_FACTOR: '0.95'
+          PITCH_FACTOR: '1.25'
 
         run: |
           python3 - <<'EOF'
@@ -215,7 +215,7 @@ jobs:
           # ============================================================
 
           speed = float(
-              os.environ.get("XTTS_SPEED", "1.58")
+              os.environ.get("XTTS_SPEED", "1.75")
           )
 
 
@@ -235,12 +235,12 @@ jobs:
           # ============================================================
           # STEM IETS LAGER MAKEN
           #
-          # PITCH_FACTOR 0.95 = ongeveer 5% lager.
+          # PITCH_FACTOR 1.25 = ongeveer 7% lager.
           # Het tempo blijft hierbij vrijwel gelijk.
           # ============================================================
 
           pitch_factor = float(
-              os.environ.get("PITCH_FACTOR", "0.95")
+              os.environ.get("PITCH_FACTOR", "1.25")
           )
 
           pitch_output = "voice_pitched.wav"
@@ -268,7 +268,7 @@ jobs:
           # Pitch omlaag zonder het tempo merkbaar te veranderen
           new_rate = int(sample_rate * pitch_factor)
 
-          tempo_correction = 1.0 / pitch_factor
+          tempo_correction = 1.25 / pitch_factor
 
           subprocess.run(
               [
@@ -299,10 +299,10 @@ jobs:
           # NEWSBED OVERLAY
           # ============================================================
 
-          if os.path.exists("newsbed-1.mp3"):
+          if os.path.exists("weer-bed-1.mp3"):
 
               bed = AudioSegment.from_file(
-                  "newsbed-1.mp3"
+                  "weer-bed-1.mp3"
               ) - 20
 
               if len(bed) < len(voice):
