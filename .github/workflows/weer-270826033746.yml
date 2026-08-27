@@ -43,7 +43,7 @@ jobs:
           COVER_IMAGE: 'weerbericht.jpg'
 
           # Iets sneller spreken
-          XTTS_SPEED: '1.65'
+          XTTS_SPEED: '1.70'
 
           # Pitch 5% lager
           PITCH_FACTOR: '0.85'
@@ -215,7 +215,7 @@ jobs:
           # ============================================================
 
           speed = float(
-              os.environ.get("XTTS_SPEED", "1.65")
+              os.environ.get("XTTS_SPEED", "1.70")
           )
 
 
@@ -268,7 +268,7 @@ jobs:
           # Pitch omlaag zonder het tempo merkbaar te veranderen
           new_rate = int(sample_rate * pitch_factor)
 
-          tempo_correction = 1.05 / pitch_factor
+          tempo_correction = 1.10 / pitch_factor
 
           subprocess.run(
               [
