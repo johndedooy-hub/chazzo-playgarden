@@ -46,7 +46,7 @@ jobs:
           XTTS_SPEED: '1.65'
 
           # Pitch 5% lager
-          PITCH_FACTOR: '0.90'
+          PITCH_FACTOR: '0.85'
 
         run: |
           python3 - <<'EOF'
@@ -240,7 +240,7 @@ jobs:
           # ============================================================
 
           pitch_factor = float(
-              os.environ.get("PITCH_FACTOR", "0.90")
+              os.environ.get("PITCH_FACTOR", "0.85")
           )
 
           pitch_output = "voice_pitched.wav"
