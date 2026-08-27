@@ -39,7 +39,7 @@ jobs:
 
       - name: Run TEXT pipeline
         env:
-          RSS_URL: 'https://data.buienradar.nl/1.0/feed/xml/rssbuienradar'
+          RSS_URL: 'https://weerlive.nl/api/weerlive_api_v2.php?key=demo&locatie=Steenbergen'
           COVER_IMAGE: 'weerbericht.jpg'
 
           # Iets sneller spreken
