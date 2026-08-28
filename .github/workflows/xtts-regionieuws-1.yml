@@ -40,7 +40,7 @@ jobs:
 
       - name: Run FAST pipeline
         env:
-          DRIVE_TXT_URL: 'https://focusfantastique.nl/regioagenda-playgarden.txt'
+          DRIVE_TXT_URL: 'https://www.focusfantastique.nl/regioagenda-playgarden.txt'
           COVER_IMAGE: 'regionieuws.jpg cv'
           XTTS_SPEED: '1.50'
           XDG_CACHE_HOME: '/home/runner/.cache'
