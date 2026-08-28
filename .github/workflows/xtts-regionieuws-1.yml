@@ -84,7 +84,7 @@ jobs:
               with open("regionieuws.txt", "w", encoding="utf-8") as f:
                   f.write(transcript)
           except Exception as e:
-              exit_with(f"Fout bij opslaan stationname.txt: {e}", 1)
+              exit_with(f"Fout bij opslaan regionieuws.txt: {e}", 1)
 
           # --- CPML TOS automatisch accepteren (non-interactive CI) ---
           try:
