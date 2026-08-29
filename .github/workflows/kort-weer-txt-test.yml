@@ -1,0 +1,80 @@
+name: Update Omroep Brabant Forecast
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"
+  workflow_dispatch:
+
+jobs:
+  update-forecast:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Haal forecast op en publiceer
+        shell: python
+        run: |
+          import requests
+          import json
+
+          SOURCE_URL = "https://www.omroepbrabant.nl/weer"
+          OUTPUT_URL = "https://focusfantastique.nl/ff-regioagenda-playground.txt"
+
+          # Omroep Brabant ophalen
+          response = requests.get(
+              SOURCE_URL,
+              headers={
+                  "User-Agent": "Mozilla/5.0"
+              },
+              timeout=30
+          )
+          response.raise_for_status()
+
+          html = response.text
+
+          # Begin en einde van de forecast
+          start_marker = '"forecast":"'
+          end_marker = '","mapURL'
+
+          start = html.find(start_marker)
+
+          if start == -1:
+              raise Exception("Start-marker 'forecast' niet gevonden")
+
+          start += len(start_marker)
+
+          end = html.find(end_marker, start)
+
+          if end == -1:
+              raise Exception("Eind-marker 'mapURL' niet gevonden")
+
+          # Alleen de forecast eruit halen
+          forecast = html[start:end]
+
+          # JSON escaping correct decoderen
+          forecast = json.loads('"' + forecast + '"')
+
+          forecast = forecast.strip()
+
+          print("Gevonden forecast:")
+          print("--------------------------------")
+          print(forecast)
+          print("--------------------------------")
+
+          if not forecast:
+              raise Exception("Forecast is leeg")
+
+          # Naar focusfantastique.nl schrijven
+          upload = requests.put(
+              OUTPUT_URL,
+              data=forecast.encode("utf-8"),
+              headers={
+                  "Content-Type": "text/plain; charset=utf-8"
+              },
+              timeout=30
+          )
+
+          print(f"Upload HTTP status: {upload.status_code}")
+
+          upload.raise_for_status()
+
+          print("Forecast succesvol gepubliceerd.")
