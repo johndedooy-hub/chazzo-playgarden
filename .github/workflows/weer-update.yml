@@ -1,4 +1,4 @@
-name: Update Omroep Brabant Forecast
+name: Update Omroep Brabant Forecast Fantastique
 
 on:
   workflow_dispatch:
