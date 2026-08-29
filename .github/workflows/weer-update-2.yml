@@ -82,7 +82,11 @@ jobs:
           # --- TXT OPSLAAN ---
           try:
               with open("weer-update.txt", "w", encoding="utf-8") as f:
-                  f.write(transcript)
+                  f.write(
+                  "Hallo, dit is de Focus Fantastiek Weer Update.\n"
+                  + text +
+                  "En dat was het weer, tot straks!"
+              )
           except Exception as e:
               exit_with(f"Fout bij opslaan weer-update.txt: {e}", 1)
 
