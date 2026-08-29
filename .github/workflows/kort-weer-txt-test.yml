@@ -17,7 +17,7 @@ jobs:
           import json
 
           SOURCE_URL = "https://www.omroepbrabant.nl/weer"
-          OUTPUT_URL = "https://focusfantastique.nl/ff-regioagenda-playground.txt"
+          OUTPUT_URL = "https://focusfantastique.nl/ff-regioagenda-playgarden.txt"
 
           # Omroep Brabant ophalen
           response = requests.get(
