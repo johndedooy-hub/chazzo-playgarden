@@ -40,8 +40,8 @@ jobs:
 
       - name: Run FAST pipeline
         env:
-          DRIVE_TXT_URL: 'https://focusfantastique.nl/ff-regioagenda-playgarden.txt'
-          COVER_IMAGE: 'regionieuws.jpg cv'
+          DRIVE_TXT_URL: 'https://focusfantastique.nl/weer-update.txt'
+          COVER_IMAGE: 'weer-update.jpg cv'
           XTTS_SPEED: '1.50'
           XDG_CACHE_HOME: '/home/runner/.cache'
           TORCH_HOME: '/home/runner/.cache/torch'
@@ -81,10 +81,10 @@ jobs:
 
           # --- TXT OPSLAAN ---
           try:
-              with open("regionieuws.txt", "w", encoding="utf-8") as f:
+              with open("weer-update.txt", "w", encoding="utf-8") as f:
                   f.write(transcript)
           except Exception as e:
-              exit_with(f"Fout bij opslaan regionieuws.txt: {e}", 1)
+              exit_with(f"Fout bij opslaan weer-update.txt: {e}", 1)
 
           # --- CPML TOS automatisch accepteren (non-interactive CI) ---
           try:
@@ -178,7 +178,7 @@ jobs:
           final = voice
           if os.path.exists("newsbed-1.mp3"):
               try:
-                  bed = AudioSegment.from_file("newsbed-1.mp3") - 20
+                  bed = AudioSegment.from_file("weer-update-bed.mp3") - 20
                   if len(bed) < len(voice) and len(bed) > 0:
                       repeat = math.ceil(len(voice) / len(bed))
                       bed = bed * repeat
@@ -190,30 +190,30 @@ jobs:
 
           # --- EXPORT MP3 ---
           try:
-              final.export("regionieuws.mp3", format="mp3", bitrate="128k")
+              final.export("weer-update.mp3", format="mp3", bitrate="128k")
           except Exception as e:
-              exit_with(f"Fout bij export regionieuws.mp3: {e}", 1)
+              exit_with(f"Fout bij export weer-update.mp3: {e}", 1)
 
           # --- ID3 TAGS ---
           try:
               try:
-                  id3 = ID3("regionieuws.mp3")
+                  id3 = ID3("weer-update.mp3")
               except ID3NoHeaderError:
                   id3 = ID3()
 
-              id3.add(TIT2(encoding=3, text="Chazzo Regio Update"))
-              id3.add(TALB(encoding=3, text="Chazzo Regio Update"))
+              id3.add(TIT2(encoding=3, text="Weer Update"))
+              id3.add(TALB(encoding=3, text=Weer Update"))
 
-              cover = os.environ.get("COVER_IMAGE", "regionieuws.jpg")
+              cover = os.environ.get("COVER_IMAGE", "weer-update.jpg")
               if os.path.exists(cover):
                   with open(cover, "rb") as img:
                       id3.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=img.read()))
 
-              id3.save("regionieuws.mp3")
+              id3.save("weer-update.mp3")
           except Exception as e:
               print("Waarschuwing: ID3 taggen faalde:", e)
 
-          print("Pipeline voltooid: regionieuws.txt en regionieuws.mp3 aangemaakt.")
+          print("Pipeline voltooid: weer-update.txt en weer-update.mp3 aangemaakt.")
           EOF
 
       - name: Commit and push changes
@@ -222,13 +222,13 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
 
-          git add regionieuws.mp3 regionieuws.txt || true
+          git add weer-update.mp3 weer-update.txt || true
           git pull origin main --rebase || true
 
           if git diff --cached --quiet; then
             echo "Geen wijzigingen om te committen."
           else
-            git commit -m "FAST Update: Chazzo Regio Update - UTC+2 $(date '+%H:%M')"
+            git commit -m "FAST Update: Weer Update - UTC+2 $(date '+%H:%M')"
             git push
           fi
           
