@@ -1,0 +1,234 @@
+name: Omroep Brabant Forecast Txt To MP3
+
+on:
+  workflow_dispatch:
+
+jobs:
+  process-audio:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache TTS models
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/tts
+            ~/.cache/faster_whisper
+          key: tts-whisper-cache
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies & FFmpeg
+        run: |
+          set -e
+          python -m pip install --upgrade pip
+          python -m pip install --default-timeout=60 torchcodec || python -m pip install --default-timeout=60 torchcodec
+          python -m pip install --default-timeout=60 "transformers<4.40.0" "scipy<1.13.0" pydub mutagen requests python-dateutil TTS || python -m pip install --default-timeout=60 "transformers<4.40.0" "scipy<1.13.0" pydub mutagen requests python-dateutil TTS
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Run FAST pipeline
+        env:
+          DRIVE_TXT_URL: 'https://focusfantastique.nl/ff-regioagenda-playgarden.txt'
+          COVER_IMAGE: 'regionieuws.jpg cv'
+          XTTS_SPEED: '1.50'
+          XDG_CACHE_HOME: '/home/runner/.cache'
+          TORCH_HOME: '/home/runner/.cache/torch'
+          TRANSFORMERS_CACHE: '/home/runner/.cache/huggingface'
+        run: |
+          set -e
+          python3 - <<'EOF'
+          import os
+          import sys
+          import math
+          import requests
+          from pydub import AudioSegment, effects
+          from mutagen.id3 import ID3, TIT2, TALB, APIC, ID3NoHeaderError
+
+          def exit_with(msg, code=1):
+              print(msg)
+              sys.exit(code)
+
+          # --- DOWNLOAD TXT VAN GOOGLE DRIVE ---
+          url = os.environ.get("DRIVE_TXT_URL")
+          if not url:
+              exit_with("DRIVE_TXT_URL is niet ingesteld.", 1)
+
+          try:
+              resp = requests.get(url, timeout=60)
+              resp.raise_for_status()
+              txt_data = resp.text
+          except Exception as e:
+              exit_with(f"Fout bij downloaden TXT: {e}", 1)
+
+          txt_data = txt_data.strip()
+          if not txt_data:
+              exit_with("TXT bestand is leeg — workflow stopt netjes.", 0)
+
+          # --- TXT DIRECT GEBRUIKEN (geen intro/outro) ---
+          transcript = txt_data
+
+          # --- TXT OPSLAAN ---
+          try:
+              with open("regionieuws.txt", "w", encoding="utf-8") as f:
+                  f.write(transcript)
+          except Exception as e:
+              exit_with(f"Fout bij opslaan regionieuws.txt: {e}", 1)
+
+          # --- CPML TOS automatisch accepteren (non-interactive CI) ---
+          try:
+              from TTS.utils.manage import ModelManager
+              def _skip_tos(self, output_path):
+                  print("CPML TOS automatisch geaccepteerd (CI).")
+                  return True
+              ModelManager.ask_tos = _skip_tos
+          except Exception as e:
+              print("Waarschuwing: kon CPML TOS override niet instellen:", e)
+
+          # --- MODEL VOORAF DOWNLOADEN (vermijdt runtime prompts en partial loads) ---
+          model_name = "tts_models/multilingual/multi-dataset/xtts_v2"
+          model_path = None
+          try:
+              manager = ModelManager()
+              print("Start model download via ModelManager:", model_name)
+              model_path, config_path, model_item = manager.download_model(model_name)
+              print("Model gedownload naar:", model_path)
+          except Exception as e:
+              exit_with(f"Fout bij downloaden XTTS model via ModelManager: {e}", 1)
+
+          # --- SAFE GLOBALS VOOR TORCH LOAD (voorkomt Unsupported global errors) ---
+          try:
+              import torch
+              from TTS.tts.configs.xtts_config import XttsConfig
+              from TTS.tts.models.xtts import XttsAudioConfig, XttsArgs
+              from TTS.config.shared_configs import BaseDatasetConfig
+              # Allowlist de benodigde classes voor torch.load
+              torch.serialization.add_safe_globals([XttsConfig, XttsAudioConfig, XttsArgs, BaseDatasetConfig])
+              print("Torch safe globals toegevoegd.")
+          except Exception as e:
+              print("Waarschuwing: kon torch safe globals niet instellen:", e)
+
+          # --- XTTS INITIALISATIE (gebruik lokaal model pad) ---
+          try:
+              from TTS.api import TTS
+          except Exception as e:
+              exit_with(f"Fout bij import TTS.api: {e}", 1)
+
+          try:
+              tts_source = model_path if model_path else model_name
+              tts = TTS(tts_source)
+          except Exception as e:
+              exit_with(f"Fout bij laden XTTS model in TTS: {e}", 1)
+
+          # --- PREPARE SPEAKER WAV (fallback als niet aanwezig) ---
+          speaker_src = "stem_voorbeeld.mp3"
+          if not os.path.exists(speaker_src):
+              print("stem_voorbeeld.mp3 niet gevonden; maak fallback clean_speaker.wav (stil).")
+              silent = AudioSegment.silent(duration=1000)
+              silent.export("clean_speaker.wav", format="wav")
+          else:
+              try:
+                  speaker = AudioSegment.from_file(speaker_src)
+                  speaker = effects.normalize(speaker)
+                  speaker = speaker.low_pass_filter(9000)
+                  speaker = speaker.high_pass_filter(100)
+                  speaker.export("clean_speaker.wav", format="wav")
+              except Exception as e:
+                  exit_with(f"Fout bij verwerken stem_voorbeeld.mp3: {e}", 1)
+
+          # --- RUN TTS ---
+          try:
+              speed = float(os.environ.get("XTTS_SPEED", "1.50"))
+          except Exception:
+              speed = 1.50
+
+          try:
+              tts.tts_to_file(
+                  text=transcript,
+                  speaker_wav="clean_speaker.wav",
+                  language="nl",
+                  file_path="raw.wav",
+                  speed=speed
+              )
+          except Exception as e:
+              exit_with(f"Fout tijdens TTS generatie: {e}", 1)
+
+          # --- LAAD EN NORMALISEER OUTPUT ---
+          if not os.path.exists("raw.wav"):
+              exit_with("raw.wav niet aangemaakt door TTS.", 1)
+
+          try:
+              voice = AudioSegment.from_file("raw.wav")
+              voice = effects.normalize(voice)
+          except Exception as e:
+              exit_with(f"Fout bij laden raw.wav: {e}", 1)
+
+          # --- NEWSBED OVERLAY (optioneel) ---
+          final = voice
+          if os.path.exists("newsbed-1.mp3"):
+              try:
+                  bed = AudioSegment.from_file("newsbed-1.mp3") - 20
+                  if len(bed) < len(voice) and len(bed) > 0:
+                      repeat = math.ceil(len(voice) / len(bed))
+                      bed = bed * repeat
+                  bed = bed[:len(voice)]
+                  final = bed.overlay(voice)
+              except Exception as e:
+                  print("Waarschuwing: newsbed overlay faalde:", e)
+                  final = voice
+
+          # --- EXPORT MP3 ---
+          try:
+              final.export("regionieuws.mp3", format="mp3", bitrate="128k")
+          except Exception as e:
+              exit_with(f"Fout bij export regionieuws.mp3: {e}", 1)
+
+          # --- ID3 TAGS ---
+          try:
+              try:
+                  id3 = ID3("regionieuws.mp3")
+              except ID3NoHeaderError:
+                  id3 = ID3()
+
+              id3.add(TIT2(encoding=3, text="Chazzo Regio Update"))
+              id3.add(TALB(encoding=3, text="Chazzo Regio Update"))
+
+              cover = os.environ.get("COVER_IMAGE", "regionieuws.jpg")
+              if os.path.exists(cover):
+                  with open(cover, "rb") as img:
+                      id3.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=img.read()))
+
+              id3.save("regionieuws.mp3")
+          except Exception as e:
+              print("Waarschuwing: ID3 taggen faalde:", e)
+
+          print("Pipeline voltooid: regionieuws.txt en regionieuws.mp3 aangemaakt.")
+          EOF
+
+      - name: Commit and push changes
+        run: |
+          set -e
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          git add regionieuws.mp3 regionieuws.txt || true
+          git pull origin main --rebase || true
+
+          if git diff --cached --quiet; then
+            echo "Geen wijzigingen om te committen."
+          else
+            git commit -m "FAST Update: Chazzo Regio Update - UTC+2 $(date '+%H:%M')"
+            git push
+          fi
+          
