@@ -1,96 +1,30 @@
-name: Automatisch Weerbericht naar TXT
-
-# ------------------------------------------------------------------------------
-# TRIGGER: Elke ochtend om 07:00 uur Nederlandse tijd (05:00 UTC)
-# ------------------------------------------------------------------------------
-on:
-  schedule:
-    - cron: '0 5 * * *'
-  workflow_dispatch:
-
-jobs:
-  update-weather-file:
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
-
-    steps:
-    - name: Checkout repository code
-      uses: actions/checkout@v4
-
-    - name: Installeer Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-
-    - name: Installeer benodigde packages
-      run: |
-        python -m pip install --upgrade pip
-        pip install requests openai
-
-    - name: Haal KNMI data op en genereer TXT via AI
-      env:
-        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      run: |
-        python - <<EOF
-        import os
-        import requests
-        from openai import OpenAI
-
-        # 1. Betrouwbare weersgegevens ophalen (Landelijke verwachting)
+        # 1. Weersgegevens ophalen via de betrouwbare KNMI-API datafeed
         try:
-            # We gebruiken de openbare API-feed van het KNMI (vrij van lay-outwijzigingen)
             response = requests.get("https://knmi.nl", timeout=15)
             data = response.json()
-            # Selecteer de actuele weersomschrijving van de meteoroloog
-            weer_data_input = data.get("forecast", [{}])[0].get("narrative", "")
+            volledige_tekst = data.get("forecast", [{}]).get("narrative", "")
         except Exception as e:
-            print(f"Fout bij ophalen KNMI data: {e}")
-            weer_data_input = None
+            print(f"Fout bij ophalen bron: {e}")
+            volledige_tekst = ""
 
-        if not weer_data_input:
-            print("Kon geen actuele weersgegevens ophalen.")
+        # 2. Breder zoeken met flexibele ankers (vóór en na de hoofdtekst)
+        gefilterde_tekst = ""
+        # We zoeken naar bekende startwoorden die de NOS gebruikt voor de dagelijkse plaatsing
+        start_opties = ["Vandaag", "Overdag", "Vannacht", "Morgen"]
+        
+        start_index = -1
+        for optie in start_opties:
+            if optie in volledige_tekst:
+                start_index = volledige_tekst.find(optie)
+                break
+        
+        if start_index != -1:
+            # Pak de tekst vanaf het gevonden startpunt en neem de hele alinea/blok mee
+            gefilterde_tekst = volledige_tekst[start_index:].strip()
+        else:
+            # Volledige fallback als de specifieke ankers afwijken
+            gefilterde_tekst = volledige_tekst.strip()
+
+        if not gefilterde_tekst or len(gefilterde_tekst) < 10:
+            print("Kon geen geschikt weerberichtblok isoleren met de ankers.")
             exit(1)
-
-        # 2. Herschrijven naar unieke, correcte zinnen via OpenAI
-        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-        
-        prompt = (
-            "Je bent een professionele weurredacteur. Herschrijf de meteorologische data die je ontvangt "
-            "naar een vloeiend, prettig leesbaar Nederlands weerbericht. Zorg dat de zinsbouw en woordkeuze "
-            "volledig uniek zijn. Alle feiten (temperaturen, windrichtingen, mistkansen) moeten exact "
-            "kloppen met de bron. Geef alléén de herschreven tekst terug, zonder titels of inleiding."
-        )
-
-        completion = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": weer_data_input}
-            ],
-            temperature=0.7
-        )
-        nieuw_weerbericht = completion.choices.message.content.strip()
-
-        # 3. Opslaan in de map 'main' als 'nosweer.txt'
-        os.makedirs("main", exist_ok=True)
-        with open("main/nosweer.txt", "w", encoding="utf-8") as f:
-            f.write(nieuw_weerbericht)
-        
-        print("Het herschreven weerbericht is succesvol opgeslagen!")
-        EOF
-
-    # Stap 5: Wijzigingen opslaan in de GitHub main map
-    - name: Commit en push wijzigingen
-      run: |
-        git config --local user.email "github-actions[bot]@users.noreply.github.com"
-        git config --local user.name "github-actions[bot]"
-        git add main/nosweer.txt
-        
-        if git diff --staged --quiet; then
-          echo "Geen nieuwe weersveranderingen gevonden."
-        else
-          git commit -m "Automated update: nosweer.txt bijgewerkt met stabiele KNMI-bron"
-          git push
-        fi
