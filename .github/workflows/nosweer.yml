@@ -1,7 +1,7 @@
 name: Automatisch Weerbericht naar TXT
 
 # ------------------------------------------------------------------------------
-# TRIGGER: Draait elke ochtend om 07:00 uur Nederlandse tijd (05:00 of 06:00 UTC)
+# TRIGGER: Draait elke ochtend om 07:00 uur Nederlandse tijd (05:00 UTC)
 # En kan handmatig worden gestart via de 'Run workflow' knop in GitHub Actions.
 # ------------------------------------------------------------------------------
 on:
@@ -45,7 +45,7 @@ jobs:
         from bs4 import BeautifulSoup
         from openai import OpenAI
 
-        # 1. NOS Weerbericht Scrapen
+        # 1. LIVE NOS Weerbericht Scrapen
         try:
             response = requests.get("https://nos.nl", timeout=15)
             soup = BeautifulSoup(response.text, 'html.parser')
@@ -59,14 +59,15 @@ jobs:
             print("Geen weerbericht tekst gevonden op de NOS pagina.")
             exit(1)
 
-        # 2. Herschrijven via OpenAI API
+        # 2. Herschrijven naar andere, correcte zinnen via OpenAI API
         client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
         
         prompt = (
-            "Je bent een professionele weurredacteur. Herschrijf dit weerbericht in unieke, "
-            "eigen woorden. Behoud alle meteorologische feiten, temperaturen, regio's en "
-            "windrichtingen exact, maar zorg dat de zinsbouw en woordkeuze 100% plagiaatvrij "
-            "en vlot leesbaar zijn. Geef alleen de herschreven tekst terug zonder extra opmaak."
+            "Je bent een professionele weurredacteur. Herschrijf het ingezonden weerbericht "
+            "in volledig andere, correcte Nederlandse zinnen. Alle meteorologische feiten, "
+            "temperaturen en windrichtingen moeten exact kloppen, maar de zinsbouw en "
+            "woordkeuze moeten 100% uniek en plagiaatvrij zijn. Lever alléén de herschreven "
+            "tekst op, zonder inleiding, titels of aanhalingstekens."
         )
 
         completion = client.chat.completions.create(
@@ -87,18 +88,17 @@ jobs:
         print("Het herschreven weerbericht is succesvol opgeslagen in main/nosweer.txt")
         EOF
 
-    # Stap 5: Het nieuwe of aangepaste bestand automatisch committen en pushen naar GitHub
+    # Stap 5: Het aangepaste bestand automatisch uploaden naar GitHub
     - name: Commit en push wijzigingen
       run: |
         git config --local user.email "github-actions[bot]@://github.com"
         git config --local user.name "github-actions[bot]"
         git add main/nosweer.txt
         
-        # Alleen committen als er daadwerkelijk iets is veranderd in de tekst
+        # Alleen pushen als de tekst daadwerkelijk is veranderd ten opzichte van gisteren
         if git diff --staged --quiet; then
           echo "Geen wijzigingen in het weerbericht geconstateerd."
         else
-          git commit -m "Automated update: nosweer.txt bijgewerkt"
+          git commit -m "Automated update: nosweer.txt bijgewerkt met unieke tekst"
           git push
         fi
-        
