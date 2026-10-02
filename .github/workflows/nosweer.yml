@@ -1,80 +1,73 @@
 name: Automatisch Weerbericht naar TXT
 
 # ------------------------------------------------------------------------------
-# TRIGGER: Draait elke ochtend om 07:00 uur Nederlandse tijd (05:00 UTC)
-# En kan handmatig worden gestart via de 'Run workflow' knop in GitHub Actions.
+# TRIGGER: Elke ochtend om 07:00 uur Nederlandse tijd (05:00 UTC)
 # ------------------------------------------------------------------------------
 on:
   schedule:
-    - cron: '0 5 * * *' # 05:00 UTC
+    - cron: '0 5 * * *'
   workflow_dispatch:
 
 jobs:
   update-weather-file:
     runs-on: ubuntu-latest
 
-    # Geef de workflow schrijfrechten om bestanden terug te pushen naar de repository
     permissions:
       contents: write
 
     steps:
-    # Stap 1: De code uit de repository ophalen
     - name: Checkout repository code
       uses: actions/checkout@v4
 
-    # Stap 2: Python installeren op de GitHub server
     - name: Installeer Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
-    # Stap 3: De benodigde softwarepakketten installeren
     - name: Installeer benodigde packages
       run: |
         python -m pip install --upgrade pip
-        pip install requests beautifulsoup4 openai
+        pip install requests openai
 
-    # Stap 4: Het script uitvoeren dat de tekst ophaalt, herschrijft en opslaat
-    - name: Start weerscraper en genereer TXT
+    - name: Haal KNMI data op en genereer TXT via AI
       env:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       run: |
         python - <<EOF
         import os
         import requests
-        from bs4 import BeautifulSoup
         from openai import OpenAI
 
-        # 1. LIVE NOS Weerbericht Scrapen
+        # 1. Betrouwbare weersgegevens ophalen (Landelijke verwachting)
         try:
-            response = requests.get("https://nos.nl", timeout=15)
-            soup = BeautifulSoup(response.text, 'html.parser')
-            weather_element = soup.find('p', class_='weather-description__text')
-            nos_tekst = weather_element.text.strip() if weather_element else None
+            # We gebruiken de openbare API-feed van het KNMI (vrij van lay-outwijzigingen)
+            response = requests.get("https://knmi.nl", timeout=15)
+            data = response.json()
+            # Selecteer de actuele weersomschrijving van de meteoroloog
+            weer_data_input = data.get("forecast", [{}])[0].get("narrative", "")
         except Exception as e:
-            print(f"Fout bij het scrapen: {e}")
-            nos_tekst = None
+            print(f"Fout bij ophalen KNMI data: {e}")
+            weer_data_input = None
 
-        if not nos_tekst:
-            print("Geen weerbericht tekst gevonden op de NOS pagina.")
+        if not weer_data_input:
+            print("Kon geen actuele weersgegevens ophalen.")
             exit(1)
 
-        # 2. Herschrijven naar andere, correcte zinnen via OpenAI API
+        # 2. Herschrijven naar unieke, correcte zinnen via OpenAI
         client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
         
         prompt = (
-            "Je bent een professionele weurredacteur. Herschrijf het ingezonden weerbericht "
-            "in volledig andere, correcte Nederlandse zinnen. Alle meteorologische feiten, "
-            "temperaturen en windrichtingen moeten exact kloppen, maar de zinsbouw en "
-            "woordkeuze moeten 100% uniek en plagiaatvrij zijn. Lever alléén de herschreven "
-            "tekst op, zonder inleiding, titels of aanhalingstekens."
+            "Je bent een professionele weurredacteur. Herschrijf de meteorologische data die je ontvangt "
+            "naar een vloeiend, prettig leesbaar Nederlands weerbericht. Zorg dat de zinsbouw en woordkeuze "
+            "volledig uniek zijn. Alle feiten (temperaturen, windrichtingen, mistkansen) moeten exact "
+            "kloppen met de bron. Geef alléén de herschreven tekst terug, zonder titels of inleiding."
         )
 
         completion = client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": prompt},
-                {"role": "user", "content": nos_tekst}
+                {"role": "user", "content": weer_data_input}
             ],
             temperature=0.7
         )
@@ -85,20 +78,19 @@ jobs:
         with open("main/nosweer.txt", "w", encoding="utf-8") as f:
             f.write(nieuw_weerbericht)
         
-        print("Het herschreven weerbericht is succesvol opgeslagen in main/nosweer.txt")
+        print("Het herschreven weerbericht is succesvol opgeslagen!")
         EOF
 
-    # Stap 5: Het aangepaste bestand automatisch uploaden naar GitHub
+    # Stap 5: Wijzigingen opslaan in de GitHub main map
     - name: Commit en push wijzigingen
       run: |
-        git config --local user.email "github-actions[bot]@://github.com"
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
         git add main/nosweer.txt
         
-        # Alleen pushen als de tekst daadwerkelijk is veranderd ten opzichte van gisteren
         if git diff --staged --quiet; then
-          echo "Geen wijzigingen in het weerbericht geconstateerd."
+          echo "Geen nieuwe weersveranderingen gevonden."
         else
-          git commit -m "Automated update: nosweer.txt bijgewerkt met unieke tekst"
+          git commit -m "Automated update: nosweer.txt bijgewerkt met stabiele KNMI-bron"
           git push
         fi
