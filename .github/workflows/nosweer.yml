@@ -1,17 +1,21 @@
-name: Automatisch Weerbericht Herschrijven
+name: Automatisch Weerbericht naar TXT
 
 # ------------------------------------------------------------------------------
-# TRIGGER: Draait elke ochtend om 07:00 uur (UTC is 05:00 of 06:00 afhankelijk van zomertijd)
-# En kan handmatig worden gestart via de 'Run workflow' knop.
+# TRIGGER: Draait elke ochtend om 07:00 uur Nederlandse tijd (05:00 of 06:00 UTC)
+# En kan handmatig worden gestart via de 'Run workflow' knop in GitHub Actions.
 # ------------------------------------------------------------------------------
 on:
   schedule:
-    - cron: '0 5 * * *' # 05:00 UTC (In de winter 06:00 Nederlandse tijd, in de zomer 07:00)
+    - cron: '0 5 * * *' # 05:00 UTC
   workflow_dispatch:
 
 jobs:
-  update-weather:
+  update-weather-file:
     runs-on: ubuntu-latest
+
+    # Geef de workflow schrijfrechten om bestanden terug te pushen naar de repository
+    permissions:
+      contents: write
 
     steps:
     # Stap 1: De code uit de repository ophalen
@@ -22,7 +26,7 @@ jobs:
     - name: Installeer Python
       uses: actions/setup-python@v5
       with:
-        python-python-version: '3.10'
+        python-version: '3.10'
 
     # Stap 3: De benodigde softwarepakketten installeren
     - name: Installeer benodigde packages
@@ -30,12 +34,10 @@ jobs:
         python -m pip install --upgrade pip
         pip install requests beautifulsoup4 openai
 
-    # Stap 4: Het script uitvoeren dat alles regelt
-    - name: Start weerscraper en AI herschrijver
+    # Stap 4: Het script uitvoeren dat de tekst ophaalt, herschrijft en opslaat
+    - name: Start weerscraper en genereer TXT
       env:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        WP_JWT_TOKEN: ${{ secrets.WP_JWT_TOKEN }}
-        WP_SITE_URL: "https://jouwwebsite.nl" # VERVANG DIT door jouw website URL
       run: |
         python - <<EOF
         import os
@@ -47,7 +49,6 @@ jobs:
         try:
             response = requests.get("https://nos.nl", timeout=15)
             soup = BeautifulSoup(response.text, 'html.parser')
-            # De selector zoekt naar het tekstblok van de weersverwachting
             weather_element = soup.find('p', class_='weather-description__text')
             nos_tekst = weather_element.text.strip() if weather_element else None
         except Exception as e:
@@ -56,16 +57,16 @@ jobs:
 
         if not nos_tekst:
             print("Geen weerbericht tekst gevonden op de NOS pagina.")
-            exit(0)
+            exit(1)
 
         # 2. Herschrijven via OpenAI API
         client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
         
         prompt = (
             "Je bent een professionele weurredacteur. Herschrijf dit weerbericht in unieke, "
-            "eigen woorden voor een website. Behoud alle meteorologische feiten, temperaturen, "
-            "regio's en windrichtingen exact, maar zorg dat de zinsbouw en woordkeuze 100% "
-            "plagiaatvrij en vlot leesbaar zijn. Geef alléén de herschreven tekst terug."
+            "eigen woorden. Behoud alle meteorologische feiten, temperaturen, regio's en "
+            "windrichtingen exact, maar zorg dat de zinsbouw en woordkeuze 100% plagiaatvrij "
+            "en vlot leesbaar zijn. Geef alleen de herschreven tekst terug zonder extra opmaak."
         )
 
         completion = client.chat.completions.create(
@@ -76,23 +77,28 @@ jobs:
             ],
             temperature=0.7
         )
-        nieuw_weerbericht = completion.choices[0].message.content.strip()
+        nieuw_weerbericht = completion.choices.message.content.strip()
 
-        # 3. Publiceren naar WordPress via REST API
-        wp_url = f"{os.environ.get('WP_SITE_URL')}/wp-json/wp/v2/posts"
-        headers = {
-            "Authorization": f"Bearer {os.environ.get('WP_JWT_TOKEN')}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "title": "Het weer van vandaag",
-            "content": f"<!-- wp:paragraph --><p>{nieuw_weerbericht}</p><!-- /wp:paragraph -->",
-            "status": "publish" # Verander naar 'draft' als je het eerst wilt controleren in WP
-        }
-
-        wp_response = requests.post(wp_url, json=payload, headers=headers)
-        if wp_response.status_code == 201:
-            print("Weerbericht succesvol gepubliceerd op de website!")
-        else:
-            print(f"Fout bij publiceren naar WP: {wp_response.status_code} - {wp_response.text}")
+        # 3. Opslaan in de map 'main' als 'nosweer.txt'
+        os.makedirs("main", exist_ok=True)
+        with open("main/nosweer.txt", "w", encoding="utf-8") as f:
+            f.write(nieuw_weerbericht)
+        
+        print("Het herschreven weerbericht is succesvol opgeslagen in main/nosweer.txt")
         EOF
+
+    # Stap 5: Het nieuwe of aangepaste bestand automatisch committen en pushen naar GitHub
+    - name: Commit en push wijzigingen
+      run: |
+        git config --local user.email "github-actions[bot]@://github.com"
+        git config --local user.name "github-actions[bot]"
+        git add main/nosweer.txt
+        
+        # Alleen committen als er daadwerkelijk iets is veranderd in de tekst
+        if git diff --staged --quiet; then
+          echo "Geen wijzigingen in het weerbericht geconstateerd."
+        else
+          git commit -m "Automated update: nosweer.txt bijgewerkt"
+          git push
+        fi
+        
