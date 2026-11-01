@@ -1,0 +1,251 @@
+name: Text to XTTSv2 Regio [1]
+
+on:
+  workflow_dispatch:
+
+jobs:
+  process-audio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache TTS models
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/tts
+          key: tts-xtts-v2-v1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies & FFmpeg
+        run: |
+          set -e
+          python -m pip install --upgrade pip
+          python -m pip install --default-timeout=60 \
+            "transformers<4.40.0" "scipy<1.13.0" pydub mutagen requests python-dateutil TTS
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Run FAST pipeline
+        env:
+          DRIVE_TXT_URL: 'https://focusfantastique.nl/ff-regioagenda-playgarden.txt'
+          COVER_IMAGE: 'regionieuws.jpg'
+          XTTS_SPEED: '1.15'
+          COQUI_TOS_AGREED: '1'
+        run: |
+          set -e
+          python3 - <<'EOF'
+          import os
+          import re
+          import sys
+          import math
+          import requests
+          from pydub import AudioSegment, effects
+          from mutagen.id3 import ID3, TIT2, TALB, APIC, ID3NoHeaderError
+
+          def exit_with(msg, code=1):
+              print(msg)
+              sys.exit(code)
+
+          # --- DOWNLOAD TXT ---
+          url = os.environ.get("DRIVE_TXT_URL")
+          if not url:
+              exit_with("DRIVE_TXT_URL is niet ingesteld.", 1)
+
+          try:
+              resp = requests.get(url, timeout=60)
+              resp.raise_for_status()
+              resp.encoding = resp.apparent_encoding if resp.encoding is None else resp.encoding
+              txt_data = resp.text
+          except Exception as e:
+              exit_with(f"Fout bij downloaden TXT: {e}", 1)
+
+          transcript = txt_data.strip()
+          if not transcript:
+              exit_with("TXT bestand is leeg — workflow stopt netjes.", 0)
+
+          with open("regionieuws.txt", "w", encoding="utf-8") as f:
+              f.write(transcript)
+
+          # --- TEKST OPSPLITSEN IN CHUNKS (XTTS kapt lange zinnen af) ---
+          def split_text(text, max_len=220):
+              text = re.sub(r"[ \t]+", " ", text)
+              paragraphs = [p.strip() for p in re.split(r"\n+", text) if p.strip()]
+              chunks = []
+              for para in paragraphs:
+                  sentences = re.split(r"(?<=[.!?])\s+", para)
+                  current = ""
+                  for s in sentences:
+                      if len(s) > max_len:
+                          # te lange zin: splitsen op komma's/spaties
+                          parts = re.split(r"(?<=[,;:])\s+", s)
+                          for p in parts:
+                              while len(p) > max_len:
+                                  cut = p.rfind(" ", 0, max_len)
+                                  cut = cut if cut > 0 else max_len
+                                  if current:
+                                      chunks.append(current)
+                                      current = ""
+                                  chunks.append(p[:cut].strip())
+                                  p = p[cut:].strip()
+                              if len(current) + len(p) + 1 <= max_len:
+                                  current = (current + " " + p).strip()
+                              else:
+                                  if current:
+                                      chunks.append(current)
+                                  current = p
+                      elif len(current) + len(s) + 1 <= max_len:
+                          current = (current + " " + s).strip()
+                      else:
+                          if current:
+                              chunks.append(current)
+                          current = s
+                  if current:
+                      chunks.append(current)
+              return [c for c in chunks if c.strip()]
+
+          chunks = split_text(transcript)
+          print(f"Tekst opgesplitst in {len(chunks)} stukken.")
+
+          # --- TOS AUTOMATISCH ACCEPTEREN (CI) ---
+          try:
+              from TTS.utils.manage import ModelManager
+              ModelManager.ask_tos = lambda self, output_path: True
+          except Exception as e:
+              print("Waarschuwing: kon TOS override niet instellen:", e)
+
+          # --- MODEL DOWNLOADEN ---
+          model_name = "tts_models/multilingual/multi-dataset/xtts_v2"
+          try:
+              manager = ModelManager()
+              model_path, config_path, model_item = manager.download_model(model_name)
+              print("Model gedownload naar:", model_path)
+          except Exception as e:
+              exit_with(f"Fout bij downloaden XTTS model: {e}", 1)
+
+          # --- TORCH SAFE GLOBALS ---
+          try:
+              import torch
+              from TTS.tts.configs.xtts_config import XttsConfig
+              from TTS.tts.models.xtts import XttsAudioConfig, XttsArgs
+              from TTS.config.shared_configs import BaseDatasetConfig
+              torch.serialization.add_safe_globals(
+                  [XttsConfig, XttsAudioConfig, XttsArgs, BaseDatasetConfig]
+              )
+          except Exception as e:
+              print("Waarschuwing: kon torch safe globals niet instellen:", e)
+
+          # --- XTTS INITIALISEREN ---
+          try:
+              from TTS.api import TTS
+              tts = TTS(model_name)
+          except Exception as e:
+              exit_with(f"Fout bij laden XTTS model: {e}", 1)
+
+          # --- SPEAKER WAV ---
+          speaker_src = "stem_voorbeeld.mp3"
+          if not os.path.exists(speaker_src):
+              exit_with("stem_voorbeeld.mp3 ontbreekt in de repository.", 1)
+          try:
+              speaker = AudioSegment.from_file(speaker_src)
+              speaker = effects.normalize(speaker)
+              speaker = speaker.low_pass_filter(9000).high_pass_filter(100)
+              speaker.export("clean_speaker.wav", format="wav")
+          except Exception as e:
+              exit_with(f"Fout bij verwerken stem_voorbeeld.mp3: {e}", 1)
+
+          # --- TTS PER CHUNK ---
+          try:
+              speed = float(os.environ.get("XTTS_SPEED", "1.15"))
+          except Exception:
+              speed = 1.15
+
+          voice = AudioSegment.silent(duration=300)
+          pause = AudioSegment.silent(duration=250)
+          for i, chunk in enumerate(chunks, 1):
+              tmp = f"chunk_{i}.wav"
+              try:
+                  tts.tts_to_file(
+                      text=chunk,
+                      speaker_wav="clean_speaker.wav",
+                      language="nl",
+                      file_path=tmp,
+                      speed=speed,
+                  )
+                  voice += AudioSegment.from_file(tmp) + pause
+              except Exception as e:
+                  print(f"Waarschuwing: chunk {i} mislukt ({e}); overgeslagen.")
+              finally:
+                  if os.path.exists(tmp):
+                      os.remove(tmp)
+              if i % 10 == 0:
+                  print(f"{i}/{len(chunks)} klaar")
+
+          if len(voice) <= 600:
+              exit_with("Geen audio gegenereerd.", 1)
+
+          voice = effects.normalize(voice)
+
+          # --- NEWSBED OVERLAY (optioneel) ---
+          final = voice
+          if os.path.exists("newsbed-1.mp3"):
+              try:
+                  bed = AudioSegment.from_file("newsbed-1.mp3") - 20
+                  if 0 < len(bed) < len(voice):
+                      bed = bed * math.ceil(len(voice) / len(bed))
+                  bed = bed[:len(voice)]
+                  final = bed.overlay(voice)
+              except Exception as e:
+                  print("Waarschuwing: newsbed overlay faalde:", e)
+                  final = voice
+
+          # --- EXPORT ---
+          final.export("regionieuws.mp3", format="mp3", bitrate="128k")
+
+          # --- ID3 TAGS ---
+          try:
+              try:
+                  id3 = ID3("regionieuws.mp3")
+              except ID3NoHeaderError:
+                  id3 = ID3()
+              id3.add(TIT2(encoding=3, text="Chazzo Regio Update"))
+              id3.add(TALB(encoding=3, text="Chazzo Regio Update"))
+              cover = os.environ.get("COVER_IMAGE", "regionieuws.jpg")
+              if os.path.exists(cover):
+                  with open(cover, "rb") as img:
+                      id3.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=img.read()))
+              else:
+                  print(f"Cover {cover} niet gevonden; overgeslagen.")
+              id3.save("regionieuws.mp3", v2_version=3)
+          except Exception as e:
+              print("Waarschuwing: ID3 taggen faalde:", e)
+
+          print("Pipeline voltooid: regionieuws.txt en regionieuws.mp3 aangemaakt.")
+          EOF
+
+      - name: Commit and push changes
+        run: |
+          set -e
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          git add regionieuws.mp3 regionieuws.txt
+
+          if git diff --cached --quiet; then
+            echo "Geen wijzigingen om te committen."
+          else
+            git commit -m "FAST Update: Chazzo Regio Update $(date -u '+%Y-%m-%d %H:%M') UTC"
+            git pull origin main --rebase
+            git push origin HEAD:main
+          fi
