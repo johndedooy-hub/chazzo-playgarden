@@ -99,7 +99,7 @@ jobs:
           BED_FILE: 'weer-bed-1.mp3'
           SPEAKER_FILE: 'stem-voorbeeld.mp3'
           SPEAKER_MAX_SECONDS: '30'
-          XTTS_SPEED: '1.7'
+          XTTS_SPEED: '1.6'
           XDG_CACHE_HOME: '/home/runner/.cache'
           TORCH_HOME: '/home/runner/.cache/torch'
           TRANSFORMERS_CACHE: '/home/runner/.cache/huggingface'
@@ -288,9 +288,9 @@ jobs:
 
           # --- SPRAAK MAKEN ---
           try:
-              speed = float(os.environ.get("XTTS_SPEED", "1.50"))
+              speed = float(os.environ.get("XTTS_SPEED", "1.60"))
           except Exception:
-              speed = 1.50
+              speed = 1.60
 
           try:
               tts.tts_to_file(
