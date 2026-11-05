@@ -1,0 +1,372 @@
+name: Weerbericht (ophalen + mp3 maken)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: weerbericht
+  cancel-in-progress: false
+
+jobs:
+  weerbericht:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ---------- STAP 1 (was 1A): weertekst ophalen ----------
+      - name: Haal weertekst op
+        shell: python
+        run: |
+          import requests
+          import re
+
+          SOURCE_URL = "https://weerplaza.nl"
+          BROWSER_HEADERS = {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          }
+
+          response = requests.get(SOURCE_URL, headers=BROWSER_HEADERS, timeout=30)
+          response.raise_for_status()
+          html = response.text
+
+          start_marker = "padding-bottom-none"
+          start_idx = html.find(start_marker)
+          if start_idx == -1:
+              raise Exception("Start-marker 'padding-bottom-none' niet gevonden")
+
+          tag_close_idx = html.find(">", start_idx)
+          if tag_close_idx == -1:
+              raise Exception("Einde van de tag met 'padding-bottom-none' niet gevonden")
+
+          content_start = tag_close_idx + 1
+          end_idx = html.find("</p>", content_start)
+          if end_idx == -1:
+              raise Exception("Eind-marker '</p>' niet gevonden na start-marker")
+
+          clean_forecast = re.sub(r'<[^>]+>', '', html[content_start:end_idx]).strip()
+          if not clean_forecast:
+              raise Exception("Forecast is leeg")
+
+          print("Gevonden forecast:")
+          print("--------------------------------")
+          print(clean_forecast)
+          print("--------------------------------")
+
+          with open("forecast-bron.txt", "w", encoding="utf-8") as f:
+              f.write(clean_forecast)
+
+      # ---------- STAP 2 (was 1B): mp3 maken ----------
+      - name: Cache TTS models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/tts
+            ~/.cache/tts
+          key: tts-xtts-v2
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-tts-v1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies & FFmpeg
+        run: |
+          set -e
+          python -m pip install --upgrade pip
+          python -m pip install --default-timeout=60 torchcodec || python -m pip install --default-timeout=60 torchcodec
+          python -m pip install --default-timeout=60 "transformers<4.40.0" "scipy<1.13.0" pydub mutagen requests python-dateutil TTS || python -m pip install --default-timeout=60 "transformers<4.40.0" "scipy<1.13.0" pydub mutagen requests python-dateutil TTS
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+
+      - name: Maak weerbericht.mp3
+        env:
+          COVER_IMAGE: 'weerbericht.jpg'
+          BED_FILE: 'weer-bed-1.mp3'
+          SPEAKER_FILE: 'stem-voorbeeld.mp3'
+          SPEAKER_MAX_SECONDS: '30'
+          XTTS_SPEED: '1.50'
+          XDG_CACHE_HOME: '/home/runner/.cache'
+          TORCH_HOME: '/home/runner/.cache/torch'
+          TRANSFORMERS_CACHE: '/home/runner/.cache/huggingface'
+        run: |
+          set -e
+          python3 - <<'EOF'
+          import os
+          import re
+          import sys
+          import math
+          import html
+          from pydub import AudioSegment, effects
+          from mutagen.id3 import ID3, TIT2, TALB, APIC, ID3NoHeaderError
+
+          def exit_with(msg, code=1):
+              print(msg)
+              sys.exit(code)
+
+          # --- TEKST LEZEN (uit stap 1) ---
+          try:
+              with open("forecast-bron.txt", "r", encoding="utf-8") as f:
+                  txt_data = html.unescape(f.read()).strip()
+          except Exception as e:
+              exit_with(f"Fout bij lezen forecast-bron.txt: {e}", 1)
+
+          if not txt_data:
+              exit_with("Tekst is leeg - workflow stopt netjes.", 0)
+
+          # --- TEKST NORMALISEREN VOOR BETERE UITSPRAAK (weertekst) ---
+          NUM_NL = ["nul", "een", "twee", "drie", "vier", "vijf", "zes",
+                    "zeven", "acht", "negen", "tien", "elf", "twaalf"]
+
+          def num_nl(n):
+              n = int(n)
+              return NUM_NL[n] if 0 <= n <= 12 else str(n)
+
+          WINDRICHTING = {
+              "NNO": "noordnoordoost", "ONO": "oostnoordoost",
+              "OZO": "oostzuidoost", "ZZO": "zuidzuidoost",
+              "ZZW": "zuidzuidwest", "WZW": "westzuidwest",
+              "WNW": "westnoordwest", "NNW": "noordnoordwest",
+              "NO": "noordoost", "ZO": "zuidoost",
+              "ZW": "zuidwest", "NW": "noordwest",
+          }
+
+          def normalize_for_tts(t):
+              # FIX: restjes HTML-codes en tags opruimen (dubbel unescape voor de zekerheid)
+              t = html.unescape(html.unescape(t))
+              t = re.sub(r"<[^>]+>", " ", t)
+              t = t.replace("\u00a0", " ")
+
+              # FIX: alinea-einde = korte pauze (punt), losse enters = spatie
+              t = re.sub(r"([.!?])\s*\n{2,}", r"\1 ", t)
+              t = re.sub(r"\n{2,}", ". ", t)
+              t = re.sub(r"[ \t]*\n[ \t]*", " ", t)
+
+              # 's avonds, 's ochtends, 's middags, 's nachts, 's morgens
+              t = re.sub(r"(?i)['’‘`´]s[\s\u00a0]+(avonds|ochtends|morgens|middags|nachts)",
+                         lambda m: "s" + m.group(1).lower(), t)
+
+              # windkracht: "5 bft." / "4 tot 6 bft" / "4-6 bft"
+              def bft(m):
+                  a = num_nl(m.group(1))
+                  if m.group(2):
+                      return f"{a} tot {num_nl(m.group(2))} beaufort"
+                  return f"{a} beaufort"
+              t = re.sub(r"(?i)\b(\d{1,2})(?:\s*(?:tot|-|–|en)\s*(\d{1,2}))?\s*bft\b\.?",
+                         bft, t)
+
+              # windrichtingen (alleen hoofdletters, bijv. ZW, NNO)
+              t = re.sub(r"\b(NNO|ONO|OZO|ZZO|ZZW|WZW|WNW|NNW|NO|ZO|ZW|NW)\b",
+                         lambda m: WINDRICHTING[m.group(1)], t)
+
+              # temperaturen: 12°C / 12 °C / 12° -> 12 graden
+              t = re.sub(r"\s*°(?:\s*C\b)?", " graden", t)
+
+              # negatieve getallen: -3 -> min 3 (niet bij bereiken zoals 4-6)
+              t = re.sub(r"(^|\W)[-–−](\d)", r"\1min \2", t)
+
+              # decimalen: 2,5 -> 2 komma 5
+              t = re.sub(r"(\d),(\d)", r"\1 komma \2", t)
+
+              # eenheden
+              t = re.sub(r"(?i)\bkm\s*/\s*(?:u|h)\b", "kilometer per uur", t)
+              t = re.sub(r"(?i)(\d)\s*mm\b", r"\1 millimeter", t)
+              t = re.sub(r"(?i)(\d)\s*cm\b", r"\1 centimeter", t)
+              t = re.sub(r"\s*%", " procent", t)
+
+              # veelvoorkomende afkortingen
+              t = re.sub(r"(?i)\bt/m\b", "tot en met", t)
+              t = re.sub(r"(?i)\bca\.", "circa", t)
+              t = re.sub(r"(?i)\bmax\.", "maximaal", t)
+              # "min." alleen vervangen als er geen getal voor staat (anders zijn het minuten)
+              t = re.sub(r"(?i)(\d ?)?\bmin\.",
+                         lambda m: m.group(0) if m.group(1) else "minimaal", t)
+
+              # dubbele spaties opruimen
+              t = re.sub(r"[ \t]{2,}", " ", t)
+              return t
+
+          tts_txt = normalize_for_tts(txt_data)
+          print("TTS-tekst na normalisatie:\n", tts_txt)
+
+          # --- INTRO + TEKST + OUTRO ---
+          def build_transcript(body):
+              return (
+                  "Hallo, dit is de Focus Fantastiek Weer Update.\n"
+                  + body
+                  + "\n en tot zover de update. "
+              )
+
+          transcript = build_transcript(txt_data)   # originele tekst (voor het .txt bestand)
+          tts_text = build_transcript(tts_txt)      # genormaliseerde tekst (voor de spraak)
+
+          try:
+              with open("weerbericht.txt", "w", encoding="utf-8") as f:
+                  f.write(transcript)
+          except Exception as e:
+              exit_with(f"Fout bij opslaan weerbericht.txt: {e}", 1)
+
+          # --- CPML TOS automatisch accepteren (non-interactive CI) ---
+          try:
+              from TTS.utils.manage import ModelManager
+
+              def _skip_tos(self, output_path):
+                  print("CPML TOS automatisch geaccepteerd (CI).")
+                  return True
+
+              ModelManager.ask_tos = _skip_tos
+          except Exception as e:
+              print("Waarschuwing: kon CPML TOS override niet instellen:", e)
+
+          # --- MODEL VOORAF DOWNLOADEN ---
+          model_name = "tts_models/multilingual/multi-dataset/xtts_v2"
+          model_path = None
+          try:
+              manager = ModelManager()
+              print("Start model download via ModelManager:", model_name)
+              model_path, config_path, model_item = manager.download_model(model_name)
+              print("Model gedownload naar:", model_path)
+          except Exception as e:
+              exit_with(f"Fout bij downloaden XTTS model via ModelManager: {e}", 1)
+
+          # --- SAFE GLOBALS VOOR TORCH LOAD ---
+          try:
+              import torch
+              from TTS.tts.configs.xtts_config import XttsConfig
+              from TTS.tts.models.xtts import XttsAudioConfig, XttsArgs
+              from TTS.config.shared_configs import BaseDatasetConfig
+              torch.serialization.add_safe_globals([
+                  XttsConfig, XttsAudioConfig, XttsArgs, BaseDatasetConfig
+              ])
+              print("Torch safe globals toegevoegd.")
+          except Exception as e:
+              print("Waarschuwing: kon torch safe globals niet instellen:", e)
+
+          # --- XTTS INITIALISATIE ---
+          try:
+              from TTS.api import TTS
+          except Exception as e:
+              exit_with(f"Fout bij import TTS.api: {e}", 1)
+
+          try:
+              tts = TTS(model_path if model_path else model_name)
+          except Exception as e:
+              exit_with(f"Fout bij laden XTTS model in TTS: {e}", 1)
+
+          # --- STEMVOORBEELD KLAARMAKEN (alleen het begin, max. SPEAKER_MAX_SECONDS) ---
+          speaker_src = os.environ.get("SPEAKER_FILE", "stem-voorbeeld.mp3")
+          max_ms = int(float(os.environ.get("SPEAKER_MAX_SECONDS", "30")) * 1000)
+
+          if not os.path.exists(speaker_src):
+              print(f"{speaker_src} niet gevonden; maak fallback clean_speaker.wav (stil).")
+              AudioSegment.silent(duration=1000).export("clean_speaker.wav", format="wav")
+          else:
+              try:
+                  speaker = AudioSegment.from_file(speaker_src)
+                  print(f"Stemvoorbeeld: {len(speaker)/1000:.1f} s, gebruikt: {min(len(speaker), max_ms)/1000:.1f} s")
+                  speaker = speaker[:max_ms]
+                  speaker = effects.normalize(speaker)
+                  speaker = speaker.low_pass_filter(9000)
+                  speaker = speaker.high_pass_filter(100)
+                  speaker.export("clean_speaker.wav", format="wav")
+              except Exception as e:
+                  exit_with(f"Fout bij verwerken {speaker_src}: {e}", 1)
+
+          # --- SPRAAK MAKEN ---
+          try:
+              speed = float(os.environ.get("XTTS_SPEED", "1.50"))
+          except Exception:
+              speed = 1.50
+
+          try:
+              tts.tts_to_file(
+                  text=tts_text,
+                  speaker_wav="clean_speaker.wav",
+                  language="nl",
+                  file_path="raw.wav",
+                  speed=speed
+              )
+          except Exception as e:
+              exit_with(f"Fout tijdens TTS generatie: {e}", 1)
+
+          if not os.path.exists("raw.wav"):
+              exit_with("raw.wav niet aangemaakt door TTS.", 1)
+
+          try:
+              voice = effects.normalize(AudioSegment.from_file("raw.wav"))
+          except Exception as e:
+              exit_with(f"Fout bij laden raw.wav: {e}", 1)
+
+          # --- BEDJE ERONDER ---
+          final = voice
+          bed_file = os.environ.get("BED_FILE", "weer-bed-1.mp3")
+          if os.path.exists(bed_file):
+              try:
+                  bed = AudioSegment.from_file(bed_file) - 20
+                  if len(bed) < len(voice) and len(bed) > 0:
+                      bed = bed * math.ceil(len(voice) / len(bed))
+                  bed = bed[:len(voice)]
+                  final = bed.overlay(voice)
+              except Exception as e:
+                  print("Waarschuwing: bedje onderleggen faalde:", e)
+                  final = voice
+          else:
+              print(f"{bed_file} niet gevonden; geen bedje.")
+
+          # --- MP3 + ID3 ---
+          try:
+              final.export("weerbericht.mp3", format="mp3", bitrate="128k")
+          except Exception as e:
+              exit_with(f"Fout bij export weerbericht.mp3: {e}", 1)
+
+          try:
+              try:
+                  id3 = ID3("weerbericht.mp3")
+              except ID3NoHeaderError:
+                  id3 = ID3()
+              id3.add(TIT2(encoding=3, text="Weerbericht"))
+              id3.add(TALB(encoding=3, text="Weerbericht"))
+              cover = os.environ.get("COVER_IMAGE", "weerbericht.jpg")
+              if os.path.exists(cover):
+                  with open(cover, "rb") as img:
+                      id3.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=img.read()))
+              id3.save("weerbericht.mp3")
+          except Exception as e:
+              print("Waarschuwing: ID3 taggen faalde:", e)
+
+          print("Klaar: weerbericht.mp3 en weerbericht.txt aangemaakt.")
+          EOF
+
+      - name: Commit and push changes
+        run: |
+          set -e
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          git add weerbericht.mp3 weerbericht.txt
+
+          if git diff --cached --quiet; then
+            echo "Geen wijzigingen om te committen."
+            exit 0
+          fi
+
+          git commit -m "Weerbericht update - $(date '+%H:%M')"
+
+          git fetch origin main
+          git rebase origin/main
+
+          git push origin HEAD:main
