@@ -1,0 +1,539 @@
+name: Weerbericht (ophalen + mp3 maken)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: weerbericht
+  cancel-in-progress: false
+
+jobs:
+  weerbericht:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ---------- STAP 1: weercijfers ophalen (Open-Meteo) + korte weertekst maken ----------
+      # Weerdata: Open-Meteo.com (CC BY 4.0). Plaats aanpassen: WEER_LAT / WEER_LON.
+      # Optioneel: secret OPENAI_API_KEY (GitHub > Settings > Secrets > Actions). Zonder sleutel wordt een vaste zinsopbouw gebruikt.
+      - name: Haal weertekst op
+        shell: python
+        env:
+          WEER_LAT: '51.53'
+          WEER_LON: '4.47'
+          WEER_PLAATS: 'Roosendaal'
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          import os, json, datetime, requests
+
+          # ---- INSTELLINGEN (plaats: Roosendaal; aanpassen via WEER_LAT / WEER_LON in de yml) ----
+          LAT = os.environ.get("WEER_LAT", "51.53")
+          LON = os.environ.get("WEER_LON", "4.47")
+          PLAATS = os.environ.get("WEER_PLAATS", "Roosendaal")
+          API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
+          MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+
+          CODES = {
+              0: "helder", 1: "overwegend zonnig", 2: "half bewolkt", 3: "bewolkt",
+              45: "mistig", 48: "mistig met rijp",
+              51: "lichte motregen", 53: "motregen", 55: "dichte motregen",
+              56: "lichte ijzel", 57: "ijzel",
+              61: "lichte regen", 63: "regen", 65: "zware regen",
+              66: "lichte ijzelregen", 67: "ijzelregen",
+              71: "lichte sneeuw", 73: "sneeuw", 75: "zware sneeuw", 77: "korrelsneeuw",
+              80: "lichte buien", 81: "buien", 82: "zware buien",
+              85: "sneeuwbuien", 86: "zware sneeuwbuien",
+              95: "onweer", 96: "onweer met hagel", 99: "zwaar onweer met hagel",
+          }
+          RICHTING = ["noord", "noordnoordoost", "noordoost", "oostnoordoost", "oost", "oostzuidoost",
+                      "zuidoost", "zuidzuidoost", "zuid", "zuidzuidwest", "zuidwest", "westzuidwest",
+                      "west", "westnoordwest", "noordwest", "noordnoordwest"]
+          DAGEN = ["maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag", "zondag"]
+          def richting(graden):
+              return RICHTING[int((float(graden) % 360) / 22.5 + 0.5) % 16]
+
+          def bft(kmh):
+              grenzen = [1, 6, 12, 20, 29, 39, 50, 62, 75, 89, 103, 118]
+              return sum(1 for g in grenzen if float(kmh) >= g)
+
+          def weerzin(weer):
+              """'is het helder' / 'valt er regen' / 'is er onweer' (zodat het natuurlijk klinkt)"""
+              if any(w in weer for w in ("regen", "motregen", "sneeuw", "buien", "ijzel", "hagel")) and "onweer" not in weer:
+                  return f"valt er {weer}"
+              if "onweer" in weer:
+                  return f"is er {weer}"
+              return f"is het {weer}"
+
+          def afronden5(x):
+              return int(round(float(x) / 5.0) * 5)
+
+          url = "https://api.open-meteo.com/v1/forecast"
+          params = {
+              "latitude": LAT, "longitude": LON, "timezone": "Europe/Amsterdam",
+              "current": "temperature_2m,weather_code,wind_speed_10m,wind_direction_10m",
+              "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,"
+                       "precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,"
+                       "wind_direction_10m_dominant,sunshine_duration",
+              "forecast_days": 5, "wind_speed_unit": "kmh",
+          }
+          r = requests.get(url, params=params, timeout=30)
+          r.raise_for_status()
+          d = r.json()
+          dg = d["daily"]
+
+          def dag(i):
+              datum = datetime.date.fromisoformat(dg["time"][i])
+              return {
+                  "dag": DAGEN[datum.weekday()],
+                  "weer": CODES.get(int(dg["weather_code"][i]), "wisselend"),
+                  "max": round(dg["temperature_2m_max"][i]),
+                  "min": round(dg["temperature_2m_min"][i]),
+                  "regen_mm": round(dg["precipitation_sum"][i], 1),
+                  "regen_kans": int(dg["precipitation_probability_max"][i] or 0),
+                  "windkracht": bft(dg["wind_speed_10m_max"][i]),
+                  "windstoten_windkracht": bft(dg["wind_gusts_10m_max"][i]),
+                  "wind_uit": richting(dg["wind_direction_10m_dominant"][i]),
+                  "zon_uren": round((dg["sunshine_duration"][i] or 0) / 3600),
+              }
+
+          nu = {
+              "temp": round(d["current"]["temperature_2m"]),
+              "weer": CODES.get(int(d["current"]["weather_code"]), "wisselend"),
+              "windkracht": bft(d["current"]["wind_speed_10m"]),
+              "wind_uit": richting(d["current"]["wind_direction_10m"]),
+          }
+          dagen = [dag(i) for i in range(len(dg["time"]))]
+          vandaag, morgen, komende = dagen[0], dagen[1], dagen[2:5]
+          data = {"nu": nu, "vandaag": vandaag, "morgen": morgen, "komende_dagen": komende}
+          print("Weerdata:", json.dumps(data, ensure_ascii=False))
+
+          def sjabloon():
+              def neerslag(x):
+                  if x["regen_kans"] >= 40 or x["regen_mm"] >= 1:
+                      return f"De kans op neerslag is {x['regen_kans']} procent."
+                  return "Het blijft grotendeels droog."
+              def wind(x):
+                  t = f"De wind komt uit het {x['wind_uit']}, windkracht {x['windkracht']}."
+                  if x["windstoten_windkracht"] >= x["windkracht"] + 2:
+                      t += f" In vlagen windkracht {x['windstoten_windkracht']}."
+                  return t
+              t = (f"Op dit moment is het {nu['temp']} graden en {weerzin(nu['weer']).replace('is het ', '', 1) if weerzin(nu['weer']).startswith('is het ') else 'er ' + weerzin(nu['weer']).replace(' er ', ' ', 1).replace('is ', 'is ', 1)}. "
+                   f"Vandaag {weerzin(vandaag['weer'])}, met temperaturen tussen {vandaag['min']} en {vandaag['max']} graden. "
+                   f"{neerslag(vandaag)} {wind(vandaag)} "
+                   f"Morgen {weerzin(morgen['weer'])}, met temperaturen tussen {morgen['min']} en {morgen['max']} graden. "
+                   f"{neerslag(morgen)} {wind(morgen)} ")
+              delen = []
+              for x in komende:
+                  s = f"{x['dag']} {x['weer']} en {x['max']} graden"
+                  if x["regen_kans"] >= 50:
+                      s += " met kans op neerslag"
+                  delen.append(s)
+              return t + "De komende dagen: " + ", ".join(delen[:-1]) + " en " + delen[-1] + "."
+
+          tekst = ""
+          if API_KEY:
+              try:
+                  prompt = (
+                      "Schrijf een Nederlands radioweerbericht voor de regio Roosendaal op basis van deze "
+                      "gegevens. Spreektaal, vlot, doorlopende zinnen, geen opsomming, geen kopjes of "
+                      "dubbele punten, geen markdown, geen emoji's. Opbouw: eerst vandaag en morgen in "
+                      "ongeveer 130 tot 150 woorden, daarna de komende dagen kort in ongeveer 70 tot 80 "
+                      "woorden. Schrijf temperaturen als '12 graden'. Schrijf de wind als: 'de wind komt uit "
+                      "het zuidwest, windkracht 5' (richting voluit, 'windkracht' plus getal). Gebruik nooit "
+                      "'bft' of 'beaufort'. Windstoten alleen noemen bij veel verschil, als 'in vlagen windkracht 7'. "
+                      "Schrijf het weertype als 'is het helder', 'is het bewolkt', 'valt er regen' en gebruik "
+                      "nooit 'verwachten we'. Verzin niets; gebruik alleen de gegevens. Begin niet met een begroeting en eindig "
+                      "niet met een afsluiting. Noem de plaatsnaam niet.\n\n"
+                      + json.dumps(data, ensure_ascii=False)
+                  )
+                  resp = requests.post(
+                      "https://api.openai.com/v1/chat/completions",
+                      headers={"Authorization": f"Bearer {API_KEY}"},
+                      json={"model": MODEL, "temperature": 0.4,
+                            "messages": [{"role": "user", "content": prompt}]},
+                      timeout=60,
+                  )
+                  resp.raise_for_status()
+                  tekst = resp.json()["choices"][0]["message"]["content"].strip()
+                  if "bft" in tekst.lower() or "beaufort" in tekst.lower():
+                      print("Waarschuwing: tekst bevat windkracht-getal; sjabloon gebruikt.")
+                      tekst = ""
+              except Exception as e:
+                  print("Waarschuwing: tekst laten schrijven mislukt, sjabloon gebruikt:", e)
+                  tekst = ""
+          else:
+              print("Geen OPENAI_API_KEY; sjabloon gebruikt.")
+
+          if not tekst:
+              tekst = sjabloon()
+
+          print("Gevonden forecast:")
+          print("--------------------------------")
+          print(tekst)
+          print("--------------------------------")
+          with open("forecast-bron.txt", "w", encoding="utf-8") as f:
+              f.write(tekst)
+
+      # ---------- STAP 2 (was 1B): mp3 maken ----------
+      - name: Cache TTS models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/tts
+            ~/.cache/tts
+          key: tts-xtts-v2
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-tts-v1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies & FFmpeg
+        run: |
+          set -e
+          python -m pip install --upgrade pip
+          python -m pip install --default-timeout=60 torchcodec || python -m pip install --default-timeout=60 torchcodec
+          python -m pip install --default-timeout=60 "transformers<4.40.0" "scipy<1.13.0" pydub mutagen requests python-dateutil TTS || python -m pip install --default-timeout=60 "transformers<4.40.0" "scipy<1.13.0" pydub mutagen requests python-dateutil TTS
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+
+      - name: Maak weerbericht.mp3
+        env:
+          COVER_IMAGE: 'weer-update.jpg'
+          BED_FILE: 'weer-bed-1.mp3'
+          SPEAKER_FILE: 'stem-voorbeeld.mp3'
+          SPEAKER_MAX_SECONDS: '30'
+          # SNELHEID: dit zijn de enige twee instellingen die tellen.
+          # XTTS_SPEED = tempo waarop de stem gemaakt wordt (rustig = schoner)
+          # TEMPO_NA   = daarna versnellen met ffmpeg (totaal ongeveer 1.10 x 1.45 = 1.6)
+          XTTS_SPEED: '1.10'
+          TEMPO_NA: '1.45'
+          TTS_TEMPERATURE: '0.55'
+          XDG_CACHE_HOME: '/home/runner/.cache'
+          TORCH_HOME: '/home/runner/.cache/torch'
+          TRANSFORMERS_CACHE: '/home/runner/.cache/huggingface'
+        run: |
+          set -e
+          python3 - <<'EOF'
+          import os
+          import re
+          import sys
+          import math
+          import html
+          import subprocess
+          from pydub import AudioSegment, effects
+          from mutagen.id3 import ID3, TIT2, TALB, APIC, ID3NoHeaderError
+
+          def exit_with(msg, code=1):
+              print(msg)
+              sys.exit(code)
+
+          # --- TEKST LEZEN (uit stap 1) ---
+          try:
+              with open("forecast-bron.txt", "r", encoding="utf-8") as f:
+                  txt_data = html.unescape(f.read()).strip()
+          except Exception as e:
+              exit_with(f"Fout bij lezen forecast-bron.txt: {e}", 1)
+
+          if not txt_data:
+              exit_with("Tekst is leeg - workflow stopt netjes.", 0)
+
+          # --- TEKST NORMALISEREN VOOR BETERE UITSPRAAK (weertekst) ---
+          _EN = ["nul", "een", "twee", "drie", "vier", "vijf", "zes", "zeven", "acht", "negen",
+                 "tien", "elf", "twaalf", "dertien", "veertien", "vijftien", "zestien",
+                 "zeventien", "achttien", "negentien"]
+          _TIEN = {2: "twintig", 3: "dertig", 4: "veertig", 5: "vijftig",
+                   6: "zestig", 7: "zeventig", 8: "tachtig", 9: "negentig"}
+
+          def num_nl(n):
+              """getal (0-999) in Nederlandse woorden: 5 -> vijf, 23 -> drieentwintig"""
+              n = int(n)
+              if n < 20:
+                  return _EN[n]
+              if n < 100:
+                  t, e = divmod(n, 10)
+                  if e == 0:
+                      return _TIEN[t]
+                  eenheid = _EN[e]
+                  return eenheid + ("\u00ebn" if eenheid.endswith("e") else "en") + _TIEN[t]
+              if n < 1000:
+                  h, rest = divmod(n, 100)
+                  kop = ("honderd" if h == 1 else _EN[h] + "honderd")
+                  return kop + (num_nl(rest) if rest else "")
+              return str(n)
+
+          WINDRICHTING = {
+              "NNO": "noordnoordoost", "ONO": "oostnoordoost",
+              "OZO": "oostzuidoost", "ZZO": "zuidzuidoost",
+              "ZZW": "zuidzuidwest", "WZW": "westzuidwest",
+              "WNW": "westnoordwest", "NNW": "noordnoordwest",
+              "NO": "noordoost", "ZO": "zuidoost",
+              "ZW": "zuidwest", "NW": "noordwest",
+          }
+
+          def normalize_for_tts(t):
+              # FIX: restjes HTML-codes en tags opruimen (dubbel unescape voor de zekerheid)
+              t = html.unescape(html.unescape(t))
+              t = re.sub(r"<[^>]+>", " ", t)
+              t = t.replace("\u00a0", " ")
+
+              # FIX: alinea-einde = korte pauze (punt), losse enters = spatie
+              t = re.sub(r"([.!?])\s*\n{2,}", r"\1 ", t)
+              t = re.sub(r"\n{2,}", ". ", t)
+              t = re.sub(r"[ \t]*\n[ \t]*", " ", t)
+
+              # 's avonds, 's ochtends, 's middags, 's nachts, 's morgens
+              t = re.sub(r"(?i)['’‘`´]s[\s\u00a0]+(avonds|ochtends|morgens|middags|nachts)",
+                         lambda m: "s" + m.group(1).lower(), t)
+
+              # windkracht: "5 bft." / "4 tot 6 bft" / "4-6 bft"
+              def bft(m):
+                  a = num_nl(m.group(1))
+                  if m.group(2):
+                      return f"{a} tot {num_nl(m.group(2))} beaufort"
+                  return f"{a} beaufort"
+              t = re.sub(r"(?i)\b(\d{1,2})(?:\s*(?:tot|-|–|en)\s*(\d{1,2}))?\s*bft\b\.?",
+                         bft, t)
+
+              # windrichtingen (alleen hoofdletters, bijv. ZW, NNO)
+              t = re.sub(r"\b(NNO|ONO|OZO|ZZO|ZZW|WZW|WNW|NNW|NO|ZO|ZW|NW)\b",
+                         lambda m: WINDRICHTING[m.group(1)], t)
+
+              # temperaturen: 12°C / 12 °C / 12° -> 12 graden
+              t = re.sub(r"\s*°(?:\s*C\b)?", " graden", t)
+
+              # negatieve getallen: -3 -> min 3 (niet bij bereiken zoals 4-6)
+              t = re.sub(r"(^|\W)[-–−](\d)", r"\1min \2", t)
+
+              # decimalen: 2,5 -> 2 komma 5
+              t = re.sub(r"(\d),(\d)", r"\1 komma \2", t)
+
+              # eenheden
+              t = re.sub(r"(?i)\bkm\s*/\s*(?:u|h)\b", "kilometer per uur", t)
+              t = re.sub(r"(?i)(\d)\s*mm\b", r"\1 millimeter", t)
+              t = re.sub(r"(?i)(\d)\s*cm\b", r"\1 centimeter", t)
+              t = re.sub(r"\s*%", " procent", t)
+
+              # veelvoorkomende afkortingen
+              t = re.sub(r"(?i)\bt/m\b", "tot en met", t)
+              t = re.sub(r"(?i)\bca\.", "circa", t)
+              t = re.sub(r"(?i)\bmax\.", "maximaal", t)
+              # "min." alleen vervangen als er geen getal voor staat (anders zijn het minuten)
+              t = re.sub(r"(?i)(\d ?)?\bmin\.",
+                         lambda m: m.group(0) if m.group(1) else "minimaal", t)
+
+              # alle overgebleven losse getallen als woorden (cijfers geven hikjes in de spraak)
+              t = re.sub(r"(?<![\d.,])\d{1,3}(?![\d.,]\d)", lambda m: num_nl(m.group(0)), t)
+
+              # dubbele spaties opruimen
+              t = re.sub(r"[ \t]{2,}", " ", t)
+              return t
+
+          tts_txt = normalize_for_tts(txt_data)
+          print("TTS-tekst na normalisatie:\n", tts_txt)
+
+          # --- UITVOEREN: elke variant = eigen intro/outro, eigen bestanden ---
+          # (bed = achtergrondmuziek; None = alleen stem)
+          VARIANTS = [
+              {"name": "weer-update", "title": "Weer Update",
+               "intro": "Hallo, dit is de Focus Fantastiek Weer Update. Ik ben Linda Storm.\n",
+               "outro": "\n en tot zover de update. ",
+               "bed": os.environ.get("BED_FILE", "weer-bed-1.mp3"),
+               "cover": os.environ.get("COVER_IMAGE", "weer-update.jpg")},
+              {"name": "Langstraat-Weer", "title": "Langstraat Weer",
+               "intro": "Dit is het Langstraat weer. Ik ben Linda Storm.\n",
+               "outro": "\nTot zover het Langstraat weer.",
+               "bed": None,
+               "cover": "Langstraat-Weer.jpg"},
+          ]
+
+          # --- CPML TOS automatisch accepteren (non-interactive CI) ---
+          try:
+              from TTS.utils.manage import ModelManager
+
+              def _skip_tos(self, output_path):
+                  print("CPML TOS automatisch geaccepteerd (CI).")
+                  return True
+
+              ModelManager.ask_tos = _skip_tos
+          except Exception as e:
+              print("Waarschuwing: kon CPML TOS override niet instellen:", e)
+
+          # --- MODEL VOORAF DOWNLOADEN ---
+          model_name = "tts_models/multilingual/multi-dataset/xtts_v2"
+          model_path = None
+          try:
+              manager = ModelManager()
+              print("Start model download via ModelManager:", model_name)
+              model_path, config_path, model_item = manager.download_model(model_name)
+              print("Model gedownload naar:", model_path)
+          except Exception as e:
+              exit_with(f"Fout bij downloaden XTTS model via ModelManager: {e}", 1)
+
+          # --- SAFE GLOBALS VOOR TORCH LOAD ---
+          try:
+              import torch
+              from TTS.tts.configs.xtts_config import XttsConfig
+              from TTS.tts.models.xtts import XttsAudioConfig, XttsArgs
+              from TTS.config.shared_configs import BaseDatasetConfig
+              torch.serialization.add_safe_globals([
+                  XttsConfig, XttsAudioConfig, XttsArgs, BaseDatasetConfig
+              ])
+              print("Torch safe globals toegevoegd.")
+          except Exception as e:
+              print("Waarschuwing: kon torch safe globals niet instellen:", e)
+
+          # --- XTTS INITIALISATIE ---
+          try:
+              from TTS.api import TTS
+          except Exception as e:
+              exit_with(f"Fout bij import TTS.api: {e}", 1)
+
+          try:
+              tts = TTS(model_path if model_path else model_name)
+          except Exception as e:
+              exit_with(f"Fout bij laden XTTS model in TTS: {e}", 1)
+
+          # --- STEMVOORBEELD KLAARMAKEN (alleen het begin, max. SPEAKER_MAX_SECONDS) ---
+          speaker_src = os.environ.get("SPEAKER_FILE", "stem-voorbeeld.mp3")
+          max_ms = int(float(os.environ.get("SPEAKER_MAX_SECONDS", "30")) * 1000)
+
+          if not os.path.exists(speaker_src):
+              print(f"{speaker_src} niet gevonden; maak fallback clean_speaker.wav (stil).")
+              AudioSegment.silent(duration=1000).export("clean_speaker.wav", format="wav")
+          else:
+              try:
+                  speaker = AudioSegment.from_file(speaker_src)
+                  print(f"Stemvoorbeeld: {len(speaker)/1000:.1f} s, gebruikt: {min(len(speaker), max_ms)/1000:.1f} s")
+                  speaker = speaker[:max_ms]
+                  speaker = effects.normalize(speaker)
+                  speaker = speaker.low_pass_filter(9000)
+                  speaker = speaker.high_pass_filter(100)
+                  speaker.export("clean_speaker.wav", format="wav")
+              except Exception as e:
+                  exit_with(f"Fout bij verwerken {speaker_src}: {e}", 1)
+
+          # --- SPRAAK MAKEN ---
+          try:
+              speed = float(os.environ.get("XTTS_SPEED", "1.10"))
+          except Exception:
+              speed = 1.10
+
+          def make_variant(v):
+              name = v["name"]
+              transcript = v["intro"] + txt_data + v["outro"]       # originele tekst (voor het .txt bestand)
+              tts_text = v["intro"] + tts_txt + v["outro"]          # genormaliseerde tekst (voor de spraak)
+
+              with open(f"{name}.txt", "w", encoding="utf-8") as f:
+                  f.write(transcript)
+
+              raw = f"raw-{name}.wav"
+              try:
+                  temperatuur = float(os.environ.get("TTS_TEMPERATURE", "0.55"))
+              except Exception:
+                  temperatuur = 0.55
+              try:
+                  tts.tts_to_file(text=tts_text, speaker_wav="clean_speaker.wav",
+                                  language="nl", file_path=raw, speed=speed,
+                                  temperature=temperatuur)
+              except TypeError:
+                  tts.tts_to_file(text=tts_text, speaker_wav="clean_speaker.wav",
+                                  language="nl", file_path=raw, speed=speed)
+              if not os.path.exists(raw):
+                  raise RuntimeError(f"{raw} niet aangemaakt door TTS.")
+
+              # daarna versnellen met ffmpeg (toonhoogte blijft gelijk)
+              try:
+                  tempo_na = float(os.environ.get("TEMPO_NA", "1.45"))
+              except Exception:
+                  tempo_na = 1.45
+              if tempo_na and abs(tempo_na - 1.0) > 0.01:
+                  snel = f"snel-{name}.wav"
+                  res = subprocess.run(
+                      ["ffmpeg", "-y", "-loglevel", "error", "-i", raw,
+                       "-filter:a", f"atempo={tempo_na}", snel],
+                      capture_output=True, text=True)
+                  if res.returncode == 0 and os.path.exists(snel):
+                      raw = snel
+                  else:
+                      print("Waarschuwing: versnellen met ffmpeg mislukt, tempo blijft zoals gemaakt:", res.stderr)
+              voice = effects.normalize(AudioSegment.from_file(raw))
+
+              # --- BEDJE ERONDER (alleen als de variant een bed heeft) ---
+              final = voice
+              bed_file = v["bed"]
+              if bed_file and os.path.exists(bed_file):
+                  try:
+                      bed = AudioSegment.from_file(bed_file) - 20
+                      if len(bed) < len(voice) and len(bed) > 0:
+                          bed = bed * math.ceil(len(voice) / len(bed))
+                      bed = bed[:len(voice)]
+                      final = bed.overlay(voice)
+                  except Exception as e:
+                      print("Waarschuwing: bedje onderleggen faalde:", e)
+                      final = voice
+              elif bed_file:
+                  print(f"{bed_file} niet gevonden; geen bedje.")
+
+              # --- MP3 + ID3 ---
+              final.export(f"{name}.mp3", format="mp3", bitrate="128k")
+              try:
+                  try:
+                      id3 = ID3(f"{name}.mp3")
+                  except ID3NoHeaderError:
+                      id3 = ID3()
+                  id3.add(TIT2(encoding=3, text=v["title"]))
+                  id3.add(TALB(encoding=3, text=v["title"]))
+                  if os.path.exists(v["cover"]):
+                      with open(v["cover"], "rb") as img:
+                          id3.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=img.read()))
+                  id3.save(f"{name}.mp3")
+              except Exception as e:
+                  print("Waarschuwing: ID3 taggen faalde:", e)
+              print(f"Klaar: {name}.mp3 en {name}.txt aangemaakt.")
+
+          mislukt = []
+          for v in VARIANTS:
+              try:
+                  make_variant(v)
+              except Exception as e:
+                  print(f"Fout bij {v['name']}: {e}")
+                  mislukt.append(v["name"])
+          if mislukt:
+              exit_with("Mislukt: " + ", ".join(mislukt), 1)
+          EOF
+
+      - name: Commit and push changes
+        run: |
+          set -e
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          git add weer-update.mp3 weer-update.txt Langstraat-Weer.mp3 Langstraat-Weer.txt
+
+          if git diff --cached --quiet; then
+            echo "Geen wijzigingen om te committen."
+            exit 0
+          fi
+
+          git commit -m "Weerbericht update - $(date '+%H:%M')"
+
+          git fetch origin main
+          git rebase origin/main
+
+          git push origin HEAD:main
