@@ -43,7 +43,7 @@ jobs:
           CODES = {
               0: "helder", 1: "overwegend zonnig", 2: "half bewolkt", 3: "bewolkt",
               45: "mistig", 48: "mistig met rijp",
-              51: "lichte motregen", 53: "motregen", 55: "dichte motregen",
+              51: "lichte mot-regen", 53: "mot-regen", 55: "dichte mot-regen",
               56: "lichte ijzel", 57: "ijzel",
               61: "lichte regen", 63: "regen", 65: "zware regen",
               66: "lichte ijzelregen", 67: "ijzelregen",
