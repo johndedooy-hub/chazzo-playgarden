@@ -219,13 +219,13 @@ jobs:
           COVER_IMAGE: 'weer-update.jpg'
           BED_FILE: 'weer-bed-1.mp3'
           SPEAKER_FILE: 'stem-voorbeeld.mp3'
-          SPEAKER_MAX_SECONDS: '15'
+          SPEAKER_MAX_SECONDS: '25'
           # SNELHEID: dit zijn de enige twee instellingen die tellen.
           # XTTS_SPEED = tempo waarop de stem gemaakt wordt (rustig = schoner)
           # TEMPO_NA   = daarna versnellen met ffmpeg (totaal 1.00 x 1.30 = 1.3; sneller = TEMPO_NA omhoog, langzamer = omlaag)
           XTTS_SPEED: '1.00'
-          TEMPO_NA: '1.10'
-          TTS_TEMPERATURE: '0.70'
+          TEMPO_NA: '1.05'
+          TTS_TEMPERATURE: '1.00'
           XDG_CACHE_HOME: '/home/runner/.cache'
           TORCH_HOME: '/home/runner/.cache/torch'
           TRANSFORMERS_CACHE: '/home/runner/.cache/huggingface'
@@ -353,13 +353,13 @@ jobs:
           # (bed = achtergrondmuziek; None = alleen stem)
           VARIANTS = [
               {"name": "weer-update", "title": "Weer Update",
-               "intro": "Hallo, dit is de Focus Fantastiek Weer Update. Ik ben Linda Storm.\n",
+               "intro": "Welkom bij de Focus Fantastiek Weer Update en ik ben Linda Storm.\n",
                "outro": "\n en tot zover de update. ",
                "bed": os.environ.get("BED_FILE", "weer-bed-1.mp3"),
                "cover": os.environ.get("COVER_IMAGE", "weer-update.jpg")},
               {"name": "Langstraat-Weer", "title": "Langstraat Weer",
-               "intro": "Dit is het Langstraat weer. Ik ben Linda Storm.\n",
-               "outro": "\nTot zover het Langstraat weer.",
+               "intro": "Dit is het Langstraat weer en ik ben Linda Storm.\n",
+               "outro": "\nEn tot zover het Langstraat weer.",
                "bed": None,
                "cover": "Langstraat-Weer.jpg"},
           ]
@@ -461,9 +461,9 @@ jobs:
 
               # daarna versnellen met ffmpeg (toonhoogte blijft gelijk)
               try:
-                  tempo_na = float(os.environ.get("TEMPO_NA", "1.30"))
+                  tempo_na = float(os.environ.get("TEMPO_NA", "1.00"))
               except Exception:
-                  tempo_na = 1.30
+                  tempo_na = 1.00
               if tempo_na and abs(tempo_na - 1.0) > 0.01:
                   snel = f"snel-{name}.wav"
                   res = subprocess.run(
