@@ -116,15 +116,15 @@ jobs:
           SPEAKER_FILE: 'stem_voorbeeld.mp3'
           SPEAKER_MAX_SECONDS: '30'
           BED_FILE: 'newsbed-1.mp3'
-          WHISPER_MODEL: 'small'
+          WHISPER_MODEL: 'medium'
           # Gesproken zinnen: INTRO komt voor het nieuws, OUTRO erna (leeg laten = niets). De eerste en laatste zin van de bron worden weggehaald.
           INTRO: 'Ik ben Linda Storm.'
-          OUTRO: 'Dit was het A.N.P. nieuws.'
+          OUTRO: 'Dit was het Chazzo nieuws.'
           # SNELHEID: XTTS_SPEED = tempo waarop de stem gemaakt wordt (rustig = schoner)
           #           TEMPO_NA   = daarna versnellen met ffmpeg (totaal 1.00 x 1.10 = 1.1)
           XTTS_SPEED: '1.00'
-          TEMPO_NA: '1.10'
-          TTS_TEMPERATURE: '0.75'
+          TEMPO_NA: '1.05'
+          TTS_TEMPERATURE: '0.50'
           XDG_CACHE_HOME: '/home/runner/.cache'
           HF_HOME: '/home/runner/.cache/huggingface'
         run: |
@@ -281,7 +281,7 @@ jobs:
           # =====================  WHISPER  =====================
           whisper = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
           segments, _ = whisper.transcribe("processed.mp3", language="nl", beam_size=3,
-                                           temperature=0, vad_filter=True)
+                                           temperature=1, vad_filter=True)
           raw_lines = [seg.text.strip() for seg in segments if seg.text.strip()]
           body = " ".join(" ".join(raw_lines).split())
           if not body:
@@ -330,7 +330,7 @@ jobs:
           try:
               temperatuur = float(os.environ.get("TTS_TEMPERATURE", "0.75"))
           except Exception:
-              temperatuur = 0.75
+              temperatuur = 0.50
 
           def spreek(tekst, pad):
               try:
@@ -351,9 +351,9 @@ jobs:
 
           # versnellen met ffmpeg (toonhoogte blijft gelijk)
           try:
-              tempo_na = float(os.environ.get("TEMPO_NA", "1.30"))
+              tempo_na = float(os.environ.get("TEMPO_NA", "1.10"))
           except Exception:
-              tempo_na = 1.30
+              tempo_na = 1.10
           bron = "raw.wav"
           if abs(tempo_na - 1.0) > 0.01:
               res = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", "raw.wav",
@@ -368,7 +368,7 @@ jobs:
           # =====================  BED + MP3 + ID3  =====================
           final = voice
           if os.path.exists(BED_FILE):
-              bed = AudioSegment.from_file(BED_FILE) - 20
+              bed = AudioSegment.from_file(BED_FILE) - 30
               if len(bed) < len(voice) and len(bed) > 0:
                   bed *= math.ceil(len(voice) / len(bed))
               final = bed[:len(voice)].overlay(voice)
