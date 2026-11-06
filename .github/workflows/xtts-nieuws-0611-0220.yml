@@ -123,8 +123,8 @@ jobs:
           # SNELHEID: XTTS_SPEED = tempo waarop de stem gemaakt wordt (rustig = schoner)
           #           TEMPO_NA   = daarna versnellen met ffmpeg (totaal 1.00 x 1.10 = 1.1)
           XTTS_SPEED: '1.00'
-          TEMPO_NA: '1.10'
-          TTS_TEMPERATURE: '0.55'
+          TEMPO_NA: '1.00'
+          TTS_TEMPERATURE: '0.65'
           XDG_CACHE_HOME: '/home/runner/.cache'
           HF_HOME: '/home/runner/.cache/huggingface'
         run: |
@@ -315,7 +315,7 @@ jobs:
           try:
               temperatuur = float(os.environ.get("TTS_TEMPERATURE", "0.55"))
           except Exception:
-              temperatuur = 0.55
+              temperatuur = 0.65
 
           def spreek(tekst, pad):
               try:
@@ -336,9 +336,9 @@ jobs:
 
           # versnellen met ffmpeg (toonhoogte blijft gelijk)
           try:
-              tempo_na = float(os.environ.get("TEMPO_NA", "1.10"))
+              tempo_na = float(os.environ.get("TEMPO_NA", "1.05"))
           except Exception:
-              tempo_na = 1.10
+              tempo_na = 1.05
           bron = "raw.wav"
           if abs(tempo_na - 1.0) > 0.01:
               res = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", "raw.wav",
