@@ -119,7 +119,7 @@ jobs:
           WHISPER_MODEL: 'small'
           # Gesproken zinnen: INTRO komt voor het nieuws, OUTRO erna (leeg laten = niets). De eerste en laatste zin van de bron worden weggehaald.
           INTRO: 'Ik ben Linda Storm.'
-          OUTRO: 'Dit was het nieuws op Focusfantastique.'
+          OUTRO: 'Op Focusfantastique.'
           # SNELHEID: XTTS_SPEED = tempo waarop de stem gemaakt wordt (rustig = schoner)
           #           TEMPO_NA   = daarna versnellen met ffmpeg (totaal 1.00 x 1.10 = 1.1)
           XTTS_SPEED: '1.00'
@@ -353,7 +353,7 @@ jobs:
           # =====================  BED + MP3 + ID3  =====================
           final = voice
           if os.path.exists(BED_FILE):
-              bed = AudioSegment.from_file(BED_FILE) - 20
+              bed = AudioSegment.from_file(BED_FILE) - 25
               if len(bed) < len(voice) and len(bed) > 0:
                   bed *= math.ceil(len(voice) / len(bed))
               final = bed[:len(voice)].overlay(voice)
