@@ -43,7 +43,7 @@ jobs:
           CODES = {
               0: "helder", 1: "overwegend zonnig", 2: "half bewolkt", 3: "bewolkt",
               45: "mistig", 48: "mistig met rijp",
-              51: "lichte mótregen", 53: "mótregen", 55: "dichte mótregen",
+              51: "lichte mod-regen", 53: "mod-regen", 55: "dichte mod-regen",
               56: "lichte ijzel", 57: "ijzel",
               61: "lichte regen", 63: "regen", 65: "zware regen",
               66: "lichte ijzelregen", 67: "ijzelregen",
@@ -65,7 +65,7 @@ jobs:
 
           def weerzin(weer):
               """'is het helder' / 'valt er regen' / 'is er onweer' (zodat het natuurlijk klinkt)"""
-              if any(w in weer for w in ("regen", "mótregen", "sneeuw", "buien", "ijzel", "hagel")) and "onweer" not in weer:
+              if any(w in weer for w in ("regen", "mod-regen", "sneeuw", "buien", "ijzel", "hagel")) and "onweer" not in weer:
                   return f"valt er {weer}"
               if "onweer" in weer:
                   return f"is er {weer}"
