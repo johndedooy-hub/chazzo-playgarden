@@ -353,8 +353,8 @@ jobs:
           # (bed = achtergrondmuziek; None = alleen stem)
           VARIANTS = [
               {"name": "weer-update", "title": "Weer Update",
-               "intro": "Welkom bij de Sea-bries Weer Update en ik ben Linda Storm.\n",
-               "outro": "\n en tot zover de Sea-bries update. ",
+               "intro": "Welkom bij de Focus Fantastiek Weer Update en ik ben Linda Storm.\n",
+               "outro": "\nEn tot zover de update. ",
                "bed": os.environ.get("BED_FILE", "weer-bed-1.mp3"),
                "cover": os.environ.get("COVER_IMAGE", "weer-update.jpg")},
               {"name": "Langstraat-Weer", "title": "Langstraat Weer",
