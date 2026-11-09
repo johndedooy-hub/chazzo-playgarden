@@ -118,12 +118,12 @@ jobs:
           BED_FILE: 'newsbed-1.mp3'
           WHISPER_MODEL: 'small'
           # Gesproken zinnen: INTRO komt voor het nieuws, OUTRO erna (leeg laten = niets). De eerste en laatste zin van de bron worden weggehaald.
-          INTRO: 'Ik ben Lindo Storm.'
-          OUTRO: 'Op focus fantastique.'
+          INTRO: 'Welkom, ik ben Lindo Storm.'
+          OUTRO: 'Op focus fantastiek.'
           # SNELHEID: XTTS_SPEED = tempo waarop de stem gemaakt wordt (rustig = schoner)
           #           TEMPO_NA   = daarna versnellen met ffmpeg (totaal 1.00 x 1.10 = 1.1)
           XTTS_SPEED: '1.00'
-          TEMPO_NA: '1.10'
+          TEMPO_NA: '1.25'
           TTS_TEMPERATURE: '0.95'
           XDG_CACHE_HOME: '/home/runner/.cache'
           HF_HOME: '/home/runner/.cache/huggingface'
@@ -370,9 +370,9 @@ jobs:
 
           # versnellen met ffmpeg (toonhoogte blijft gelijk)
           try:
-              tempo_na = float(os.environ.get("TEMPO_NA", "1.10"))
+              tempo_na = float(os.environ.get("TEMPO_NA", "1.25"))
           except Exception:
-              tempo_na = 1.10
+              tempo_na = 1.25
           bron = "raw.wav"
           if abs(tempo_na - 1.0) > 0.01:
               res = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", "raw.wav",
