@@ -114,7 +114,7 @@ jobs:
           OUTPUT_NAAM: 'stationname'
           COVER_IMAGE: 'stationname.jpg'
           SPEAKER_FILE: 'stem_voorbeeld.mp3'
-          SPEAKER_MAX_SECONDS: '30'
+          SPEAKER_MAX_SECONDS: '20'
           BED_FILE: 'newsbed-1.mp3'
           WHISPER_MODEL: 'small'
           # Gesproken zinnen: INTRO komt voor het nieuws, OUTRO erna (leeg laten = niets). De eerste en laatste zin van de bron worden weggehaald.
@@ -124,7 +124,7 @@ jobs:
           #           TEMPO_NA   = daarna versnellen met ffmpeg (totaal 1.00 x 1.10 = 1.1)
           XTTS_SPEED: '1.00'
           TEMPO_NA: '1.10'
-          TTS_TEMPERATURE: '0.55'
+          TTS_TEMPERATURE: '0.95'
           XDG_CACHE_HOME: '/home/runner/.cache'
           HF_HOME: '/home/runner/.cache/huggingface'
         run: |
@@ -347,9 +347,9 @@ jobs:
           except Exception:
               speed = 1.00
           try:
-              temperatuur = float(os.environ.get("TTS_TEMPERATURE", "0.55"))
+              temperatuur = float(os.environ.get("TTS_TEMPERATURE", "0.95"))
           except Exception:
-              temperatuur = 0.55
+              temperatuur = 0.95
 
           def spreek(tekst, pad):
               try:
@@ -370,9 +370,9 @@ jobs:
 
           # versnellen met ffmpeg (toonhoogte blijft gelijk)
           try:
-              tempo_na = float(os.environ.get("TEMPO_NA", "1.30"))
+              tempo_na = float(os.environ.get("TEMPO_NA", "1.10"))
           except Exception:
-              tempo_na = 1.30
+              tempo_na = 1.10
           bron = "raw.wav"
           if abs(tempo_na - 1.0) > 0.01:
               res = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", "raw.wav",
@@ -387,7 +387,7 @@ jobs:
           # =====================  BED + MP3 + ID3  =====================
           final = voice
           if os.path.exists(BED_FILE):
-              bed = AudioSegment.from_file(BED_FILE) - 20
+              bed = AudioSegment.from_file(BED_FILE) - 25
               if len(bed) < len(voice) and len(bed) > 0:
                   bed *= math.ceil(len(voice) / len(bed))
               final = bed[:len(voice)].overlay(voice)
