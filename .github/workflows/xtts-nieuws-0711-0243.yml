@@ -123,8 +123,8 @@ jobs:
           # SNELHEID: XTTS_SPEED = tempo waarop de stem gemaakt wordt (rustig = schoner)
           #           TEMPO_NA   = daarna versnellen met ffmpeg (totaal 1.00 x 1.10 = 1.1)
           XTTS_SPEED: '1.00'
-          TEMPO_NA: '1.20'
-          TTS_TEMPERATURE: '0.95'
+          TEMPO_NA: '1.15'
+          TTS_TEMPERATURE: '0.50'
           XDG_CACHE_HOME: '/home/runner/.cache'
           HF_HOME: '/home/runner/.cache/huggingface'
         run: |
@@ -347,9 +347,9 @@ jobs:
           except Exception:
               speed = 1.00
           try:
-              temperatuur = float(os.environ.get("TTS_TEMPERATURE", "0.95"))
+              temperatuur = float(os.environ.get("TTS_TEMPERATURE", "0.50"))
           except Exception:
-              temperatuur = 0.95
+              temperatuur = 0.50
 
           def spreek(tekst, pad):
               try:
@@ -370,9 +370,9 @@ jobs:
 
           # versnellen met ffmpeg (toonhoogte blijft gelijk)
           try:
-              tempo_na = float(os.environ.get("TEMPO_NA", "1.20"))
+              tempo_na = float(os.environ.get("TEMPO_NA", "1.15"))
           except Exception:
-              tempo_na = 1.20
+              tempo_na = 1.15
           bron = "raw.wav"
           if abs(tempo_na - 1.0) > 0.01:
               res = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", "raw.wav",
@@ -387,7 +387,7 @@ jobs:
           # =====================  BED + MP3 + ID3  =====================
           final = voice
           if os.path.exists(BED_FILE):
-              bed = AudioSegment.from_file(BED_FILE) - 25
+              bed = AudioSegment.from_file(BED_FILE) - 23
               if len(bed) < len(voice) and len(bed) > 0:
                   bed *= math.ceil(len(voice) / len(bed))
               final = bed[:len(voice)].overlay(voice)
