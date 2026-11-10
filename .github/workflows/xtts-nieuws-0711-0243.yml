@@ -113,7 +113,7 @@ jobs:
         env:
           OUTPUT_NAAM: 'stationname'
           COVER_IMAGE: 'stationname.jpg'
-          SPEAKER_FILE: 'stem_voorbeeld.mp3'
+          SPEAKER_FILE: 'stem-voorbeeld.mp3'
           SPEAKER_MAX_SECONDS: '20'
           BED_FILE: 'newsbed-1.mp3'
           WHISPER_MODEL: 'small'
