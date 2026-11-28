@@ -14,7 +14,7 @@ jobs:
     env:
       AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
       AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
-      TTS_VOICE: nl-NL-ColetteNeural
+      TTS_VOICE: nl-NL-FennaNeural
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
