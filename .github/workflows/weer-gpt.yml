@@ -1,0 +1,122 @@
+name: Nederlands radioweerbericht
+on:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: write
+concurrency:
+  group: radioweerbericht-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  weer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+      AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+      TTS_VOICE: nl-NL-MaartenNeural
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Installeer hulpmiddelen
+        run: |
+          python -m pip install --upgrade requests edge-tts
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+      - name: Genereer en controleer weerbericht
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, requests, statistics, subprocess, time, asyncio, pathlib, tempfile, html
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          from requests.adapters import HTTPAdapter
+          from urllib3.util.retry import Retry
+          import edge_tts
+          session = requests.Session()
+          session.mount('https://', HTTPAdapter(max_retries=Retry(total=3, backoff_factor=2, status_forcelist=[429,500,502,503,504], respect_retry_after_header=True)))
+          def get(url, **kw):
+              r = session.get(url, timeout=30, **kw); r.raise_for_status(); return r
+          # Landelijke spreiding: noord, oost, west, midden, zuid en kust.
+          points = [(53.22,6.57),(52.22,6.90),(52.37,4.90),(52.09,5.12),(51.44,5.48),(51.50,3.61),(52.96,4.76)]
+          def data():
+              p = dict(latitude=','.join(str(x[0]) for x in points), longitude=','.join(str(x[1]) for x in points), current='temperature_2m,weather_code,wind_speed_10m', daily='weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max', timezone='Europe/Amsterdam', forecast_days=4)
+              rows = get('https://api.open-meteo.com/v1/forecast', params=p).json()
+              if not isinstance(rows,list) or len(rows)!=len(points): raise ValueError('Onvolledige weerdata')
+              today = datetime.now(ZoneInfo('Europe/Amsterdam')).date().isoformat()
+              for row in rows:
+                  if row['daily']['time'][0]!=today or not row['current']['time'].startswith(today): raise ValueError('Verouderde weerdata')
+              return rows
+          def condition(c):
+              if c>=95: return 'onweer'
+              if c in (71,73,75,77,85,86): return 'sneeuw'
+              if c in (56,57,66,67): return 'ijzel'
+              if c in (80,81,82): return 'buien'
+              if c>=51: return 'regen'
+              if c in (45,48): return 'mist'
+              return {0:'helder weer',1:'weinig bewolking',2:'wisselende bewolking',3:'veel bewolking'}[c]
+          def overview(codes):
+              kinds = [condition(c) for c in codes]
+              counts = {k:kinds.count(k) for k in kinds}
+              ranked = sorted(counts, key=lambda k:-counts[k])
+              if len(ranked)==1: return ranked[0]
+              return ranked[0] + ', plaatselijk ook ' + ranked[1]
+          def band(values):
+              lo,hi=round(min(values)),round(max(values))
+              return f'{lo} graden' if lo==hi else f'{lo} tot {hi} graden'
+          def wind(values):
+              v=statistics.median(values)
+              return 'weinig wind' if v<12 else 'een matige wind' if v<29 else 'een vrij krachtige wind' if v<39 else 'een krachtige wind'
+          rows=data()
+          cur=[r['current'] for r in rows]; daily=[r['daily'] for r in rows]
+          def vals(key,i): return [r[key][i] for r in daily]
+          text=(f'Het weer in Nederland. Op dit moment zien we {overview([r["weather_code"] for r in cur])}. '
+                f'De temperatuur ligt rond {band([r["temperature_2m"] for r in cur])}, met over het algemeen {wind([r["wind_speed_10m"] for r in cur])}. '
+                f'Morgen verwachten we {overview(vals("weather_code",1))}. De middagtemperatuur komt uit op {band(vals("temperature_2m_max",1))}. '
+                f'Er staat overwegend {wind(vals("wind_speed_10m_max",1))}. '
+                f'Voor de dagen daarna rekenen we op {overview(vals("weather_code",2)+vals("weather_code",3))}, met maxima van {band(vals("temperature_2m_max",2)+vals("temperature_2m_max",3))}. '
+                'Dit was het weerbericht, op basis van gegevens van Open-Meteo.')
+          voice=os.environ['TTS_VOICE']; key=os.getenv('AZURE_SPEECH_KEY'); region=os.getenv('AZURE_SPEECH_REGION')
+          def synth(text,path,rate):
+              if key and region:
+                  try:
+                      ssml=f'<speak version="1.0" xml:lang="nl-NL"><voice name="{voice}"><prosody rate="{rate}">{html.escape(text)}</prosody></voice></speak>'
+                      r=session.post(f'https://{region}.tts.speech.microsoft.com/cognitiveservices/v1',headers={'Ocp-Apim-Subscription-Key':key,'Content-Type':'application/ssml+xml','X-Microsoft-OutputFormat':'audio-24khz-96kbitrate-mono-mp3'},data=ssml.encode(),timeout=60); r.raise_for_status(); path.write_bytes(r.content); return
+                  except requests.RequestException: print('Azure niet beschikbaar, Edge wordt geprobeerd.')
+              for attempt in range(3):
+                  try:
+                      asyncio.run(edge_tts.Communicate(text,voice,rate=rate).save(str(path))); return
+                  except Exception:
+                      if attempt==2: raise
+                      time.sleep(5*(attempt+1))
+          def duration(path):
+              return float(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',str(path)],text=True))
+          with tempfile.TemporaryDirectory() as tmp:
+              raw=pathlib.Path(tmp)/'raw.mp3'; out=pathlib.Path(tmp)/'weer-update.mp3'
+              synth(text,raw,'+0%')
+              if duration(raw)>58: synth(text,raw,'+12%')
+              if duration(raw)>58: raise RuntimeError('Spraak te lang; bestaand bestand blijft behouden')
+              subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y','-i',str(raw),'-af','highpass=f=75,acompressor=threshold=0.125:ratio=2:attack=15:release=150,loudnorm=I=-16:TP=-1.5:LRA=7','-ar','44100','-ac','1','-b:a','192k',str(out)],check=True)
+              if not 5<=duration(out)<=60: raise RuntimeError('Ongeldige speelduur')
+              subprocess.run(['ffmpeg','-v','error','-xerror','-i',str(out),'-f','null','-'],check=True)
+              pathlib.Path('weer-update.mp3').write_bytes(out.read_bytes())
+              pathlib.Path('weer-update.txt').write_text(text+'\n',encoding='utf-8')
+              print(text, '\nSpeelduur:', duration(out))
+          PY
+      - name: Bewaar MP3 in repository
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add weer-update.mp3 weer-update.txt
+          if ! git diff --cached --quiet; then
+            git commit -m 'Actualiseer Nederlands weerbericht'
+            git push
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weer-update
+          path: |
+            weer-update.mp3
+            weer-update.txt
